@@ -8,41 +8,42 @@ In this section you will provision a Certificate Authority that can be used to g
 
 Generate the CA configuration file, certificate, and private key:
 
-```
-cat > ca-config.json <<EOF
-{
-  "signing": {
-    "default": {
-      "expiry": "8760h"
-    },
-    "profiles": {
-      "kubernetes": {
-        "usages": ["signing", "key encipherment", "server auth", "client auth"],
-        "expiry": "8760h"
+```powershell
+@{
+  signing = @{
+    default = @{
+      expiry = '8760h'
+    }
+    profiles = @{
+      kubernetes = @{
+        usages = @(
+          'signing'
+          'key encipherment'
+          'server auth'
+          'client auth'
+        )
+        expiry = '8760h'
       }
     }
   }
-}
-EOF
+} | ConvertTo-Json -Depth 5 | Out-File -Encoding ascii ca-config.json
 
-cat > ca-csr.json <<EOF
-{
-  "CN": "Kubernetes",
-  "key": {
-    "algo": "rsa",
-    "size": 2048
-  },
-  "names": [
-    {
-      "C": "US",
-      "L": "Portland",
-      "O": "Kubernetes",
-      "OU": "CA",
-      "ST": "Oregon"
+@{
+  CN = 'Kubernetes'
+  key = @{
+    algo = 'rsa'
+    size = 2048
+  }
+  names = @(
+    @{
+      C = 'US'
+      L = 'Portland'
+      O = 'Kubernetes'
+      OU = 'CA'
+      ST = 'Oregon'
     }
-  ]
-}
-EOF
+  )
+} | ConvertTo-Json -Depth 5 | Out-File -Encoding ascii ca-csr.json 
 
 cfssl gencert -initca ca-csr.json | cfssljson -bare ca
 ```
@@ -62,31 +63,29 @@ In this section you will generate client and server certificates for each Kubern
 
 Generate the `admin` client certificate and private key:
 
-```
-cat > admin-csr.json <<EOF
-{
-  "CN": "admin",
-  "key": {
-    "algo": "rsa",
-    "size": 2048
-  },
-  "names": [
-    {
-      "C": "US",
-      "L": "Portland",
-      "O": "system:masters",
-      "OU": "Kubernetes The Hard Way",
-      "ST": "Oregon"
+```powershell
+@{
+  CN = 'admin'
+  key = @{
+    algo = 'rsa'
+    size = 2048
+  }
+  names = @(
+    @{
+      C = 'US'
+      L = 'Portland'
+      O = 'system:masters'
+      OU = 'Kubernetes The Hard Way'
+      ST = 'Oregon'
     }
-  ]
-}
-EOF
+  )
+} | ConvertTo-Json -Depth 5 | Out-File -Encoding ascii admin-csr.json 
 
-cfssl gencert \
-  -ca=ca.pem \
-  -ca-key=ca-key.pem \
-  -config=ca-config.json \
-  -profile=kubernetes \
+cfssl gencert `
+  -ca='ca.pem' `
+  -ca-key='ca-key.pem' `
+  -config='ca-config.json' `
+  -profile='kubernetes' `
   admin-csr.json | cfssljson -bare admin
 ```
 
@@ -103,47 +102,51 @@ Kubernetes uses a [special-purpose authorization mode](https://kubernetes.io/doc
 
 Generate a certificate and private key for each Kubernetes worker node:
 
-```
-for i in 0 1 2; do
-  instance="worker-${i}"
-  instance_hostname="ip-10-0-1-2${i}"
-  cat > ${instance}-csr.json <<EOF
-{
-  "CN": "system:node:${instance_hostname}",
-  "key": {
-    "algo": "rsa",
-    "size": 2048
-  },
-  "names": [
-    {
-      "C": "US",
-      "L": "Portland",
-      "O": "system:nodes",
-      "OU": "Kubernetes The Hard Way",
-      "ST": "Oregon"
+```powershell
+foreach ($i in (0..2)){
+  $InstanceName="worker-$i"
+  $InstanceHostname="ip-10-0-1-2$i"
+
+  @{
+    CN = "system:node:$InstanceHostname"
+    key = @{
+      algo = 'rsa'
+      size = 2048
     }
-  ]
+    names = @(
+      @{
+        C = 'US'
+        L = 'Portland'
+        O = 'system:nodes'
+        OU = 'Kubernetes The Hard Way'
+        ST = 'Oregon'
+      }
+    )
+  } | ConvertTo-Json -Depth 5 | Out-File -Encoding ascii "$InstanceName-csr.json"
+
+ $Instance = Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
+    -Filter @(
+      @{
+        Name = 'tag:Name'
+        Values = $InstanceName
+      }
+      @{
+        Name = 'instance-state-name'
+        Values = 'running'
+      }      
+    )
+  
+  $InstanceExternalIp = $Instance.Instances.PublicIpAddress
+  $InstanceInternalIp = $Instance.Instances.PrivateIpAddress
+
+  cfssl gencert `
+    -ca='ca.pem' `
+    -ca-key='ca-key.pem' `
+    -config='ca-config.json' `
+    -hostname="$InstanceHostname,$InstanceExternalIp,$InstanceInternalIp" `
+    -profile='kubernetes' `
+    "worker-$i-csr.json" | cfssljson -bare "worker-$i"
 }
-EOF
-
-  external_ip=$(aws ec2 describe-instances --filters \
-    "Name=tag:Name,Values=${instance}" \
-    "Name=instance-state-name,Values=running" \
-    --output text --query 'Reservations[].Instances[].PublicIpAddress')
-
-  internal_ip=$(aws ec2 describe-instances --filters \
-    "Name=tag:Name,Values=${instance}" \
-    "Name=instance-state-name,Values=running" \
-    --output text --query 'Reservations[].Instances[].PrivateIpAddress')
-
-  cfssl gencert \
-    -ca=ca.pem \
-    -ca-key=ca-key.pem \
-    -config=ca-config.json \
-    -hostname=${instance_hostname},${external_ip},${internal_ip} \
-    -profile=kubernetes \
-    worker-${i}-csr.json | cfssljson -bare worker-${i}
-done
 ```
 
 Results:
@@ -161,31 +164,29 @@ worker-2.pem
 
 Generate the `kube-controller-manager` client certificate and private key:
 
-```
-cat > kube-controller-manager-csr.json <<EOF
-{
-  "CN": "system:kube-controller-manager",
-  "key": {
-    "algo": "rsa",
-    "size": 2048
-  },
-  "names": [
-    {
-      "C": "US",
-      "L": "Portland",
-      "O": "system:kube-controller-manager",
-      "OU": "Kubernetes The Hard Way",
-      "ST": "Oregon"
+```powershell
+@{
+  CN = 'system:kube-controller-manager'
+  key = @{
+    algo = 'rsa'
+    size = 2048
+  }
+  names = @(
+    @{
+      C = 'US'
+      L = 'Portland'
+      O = 'system:kube-controller-manager'
+      OU = 'Kubernetes The Hard Way'
+      ST = 'Oregon'
     }
-  ]
-}
-EOF
+  )
+} | ConvertTo-Json -Depth 5 | Out-File -Encoding ascii kube-controller-manager-csr.json 
 
-cfssl gencert \
-  -ca=ca.pem \
-  -ca-key=ca-key.pem \
-  -config=ca-config.json \
-  -profile=kubernetes \
+cfssl gencert `
+  -ca='ca.pem' `
+  -ca-key='ca-key.pem' `
+  -config='ca-config.json' `
+  -profile='kubernetes' `
   kube-controller-manager-csr.json | cfssljson -bare kube-controller-manager
 ```
 
@@ -195,37 +196,33 @@ Results:
 kube-controller-manager-key.pem
 kube-controller-manager.pem
 ```
-
-
 ### The Kube Proxy Client Certificate
 
 Generate the `kube-proxy` client certificate and private key:
 
-```
-cat > kube-proxy-csr.json <<EOF
-{
-  "CN": "system:kube-proxy",
-  "key": {
-    "algo": "rsa",
-    "size": 2048
-  },
-  "names": [
-    {
-      "C": "US",
-      "L": "Portland",
-      "O": "system:node-proxier",
-      "OU": "Kubernetes The Hard Way",
-      "ST": "Oregon"
+```powershell
+@{
+  CN = 'system:kube-proxy'
+  key = @{
+    algo = 'rsa'
+    size = 2048
+  }
+  names = @(
+    @{
+      C = 'US'
+      L = 'Portland'
+      O = 'system:node-proxier'
+      OU = 'Kubernetes The Hard Way'
+      ST = 'Oregon'
     }
-  ]
-}
-EOF
+  )
+} | ConvertTo-Json -Depth 5 | Out-File -Encoding ascii kube-proxy-csr.json 
 
-cfssl gencert \
-  -ca=ca.pem \
-  -ca-key=ca-key.pem \
-  -config=ca-config.json \
-  -profile=kubernetes \
+cfssl gencert `
+  -ca='ca.pem' `
+  -ca-key='ca-key.pem' `
+  -config='ca-config.json' `
+  -profile='kubernetes' `
   kube-proxy-csr.json | cfssljson -bare kube-proxy
 ```
 
@@ -240,33 +237,30 @@ kube-proxy.pem
 
 Generate the `kube-scheduler` client certificate and private key:
 
-```
-cat > kube-scheduler-csr.json <<EOF
-{
-  "CN": "system:kube-scheduler",
-  "key": {
-    "algo": "rsa",
-    "size": 2048
-  },
-  "names": [
-    {
-      "C": "US",
-      "L": "Portland",
-      "O": "system:kube-scheduler",
-      "OU": "Kubernetes The Hard Way",
-      "ST": "Oregon"
+```powershell
+@{
+  CN = 'system:kube-scheduler'
+  key = @{
+    algo = 'rsa'
+    size = 2048
+  }
+  names = @(
+    @{
+      C = 'US'
+      L = 'Portland'
+      O = 'system:kube-scheduler'
+      OU = 'Kubernetes The Hard Way'
+      ST = 'Oregon'
     }
-  ]
-}
-EOF
+  )
+} | ConvertTo-Json -Depth 5 | Out-File -Encoding ascii kube-scheduler-csr.json 
 
-cfssl gencert \
-  -ca=ca.pem \
-  -ca-key=ca-key.pem \
-  -config=ca-config.json \
-  -profile=kubernetes \
+cfssl gencert `
+  -ca='ca.pem' `
+  -ca-key='ca-key.pem' `
+  -config='ca-config.json' `
+  -profile='kubernetes' `
   kube-scheduler-csr.json | cfssljson -bare kube-scheduler
-
 ```
 
 Results:
@@ -275,46 +269,44 @@ Results:
 kube-scheduler-key.pem
 kube-scheduler.pem
 ```
-
-
 ### The Kubernetes API Server Certificate
 
 The `kubernetes-the-hard-way` static IP address will be included in the list of subject alternative names for the Kubernetes API Server certificate. This will ensure the certificate can be validated by remote clients.
 
 Generate the Kubernetes API Server certificate and private key:
 
-```
-KUBERNETES_HOSTNAMES=kubernetes,kubernetes.default,kubernetes.default.svc,kubernetes.default.svc.cluster,kubernetes.svc.cluster.local
+```powershell
+$KubernetesPublicAddress = (Get-ELB2LoadBalancer -ProfileName $env:AWS_PROFILE -Name 'kubernetes').DNSName
 
-cat > kubernetes-csr.json <<EOF
-{
-  "CN": "kubernetes",
-  "key": {
-    "algo": "rsa",
-    "size": 2048
-  },
-  "names": [
-    {
-      "C": "US",
-      "L": "Portland",
-      "O": "Kubernetes",
-      "OU": "Kubernetes The Hard Way",
-      "ST": "Oregon"
+$KubernetesHostnames = 'kubernetes,kubernetes.default,kubernetes.default.svc,kubernetes.default.svc.cluster,kubernetes.svc.cluster.local'
+
+@{
+  CN = 'kubernetes'
+  key = @{
+    algo = 'rsa'
+    size = 2048
+  }
+  names = @(
+    @{
+      C = 'US'
+      L = 'Portland'
+      O = 'Kubernetes'
+      OU = 'Kubernetes The Hard Way'
+      ST = 'Oregon'
     }
-  ]
-}
-EOF
+  )
+} | ConvertTo-Json -Depth 5 | Out-File -Encoding ascii kubernetes-csr.json 
 
-cfssl gencert \
-  -ca=ca.pem \
-  -ca-key=ca-key.pem \
-  -config=ca-config.json \
-  -hostname=10.32.0.1,10.0.1.10,10.0.1.11,10.0.1.12,${KUBERNETES_PUBLIC_ADDRESS},127.0.0.1,${KUBERNETES_HOSTNAMES} \
-  -profile=kubernetes \
+cfssl gencert `
+  -ca='ca.pem' `
+  -ca-key='ca-key.pem' `
+  -config='ca-config.json' `
+  -hostname="172.18.0.1,172.16.1.10,172.16.1.11,172.16.1.12,$KubernetesPublicAddress,127.0.0.1,$KubernetesHostnames" `
+  -profile='kubernetes' `
   kubernetes-csr.json | cfssljson -bare kubernetes
 ```
 
-> The Kubernetes API server is automatically assigned the `kubernetes` internal dns name, which will be linked to the first IP address (`10.32.0.1`) from the address range (`10.32.0.0/24`) reserved for internal cluster services during the [control plane bootstrapping](08-bootstrapping-kubernetes-controllers.md#configure-the-kubernetes-api-server) lab.
+> The Kubernetes API server is automatically assigned the `kubernetes` internal dns name, which will be linked to the first IP address (`172.18.0.1`) from the address range (`172.18.0.0/24`) reserved for internal cluster services during the [control plane bootstrapping](08-bootstrapping-kubernetes-controllers.md#configure-the-kubernetes-api-server) lab.
 
 Results:
 
@@ -329,31 +321,29 @@ The Kubernetes Controller Manager leverages a key pair to generate and sign serv
 
 Generate the `service-account` certificate and private key:
 
-```
-cat > service-account-csr.json <<EOF
-{
-  "CN": "service-accounts",
-  "key": {
-    "algo": "rsa",
-    "size": 2048
-  },
-  "names": [
-    {
-      "C": "US",
-      "L": "Portland",
-      "O": "Kubernetes",
-      "OU": "Kubernetes The Hard Way",
-      "ST": "Oregon"
+```powershell
+@{
+  CN = 'service-accounts'
+  key = @{
+    algo = 'rsa'
+    size = 2048
+  }
+  names = @(
+    @{
+      C = 'US'
+      L = 'Portland'
+      O = 'Kubernetes'
+      OU = 'Kubernetes The Hard Way'
+      ST = 'Oregon'
     }
-  ]
-}
-EOF
+  )
+} | ConvertTo-Json -Depth 5 | Out-File -Encoding ascii service-account-csr.json 
 
-cfssl gencert \
-  -ca=ca.pem \
-  -ca-key=ca-key.pem \
-  -config=ca-config.json \
-  -profile=kubernetes \
+cfssl gencert `
+  -ca='ca.pem' `
+  -ca-key='ca-key.pem' `
+  -config='ca-config.json' `
+  -profile='kubernetes' `
   service-account-csr.json | cfssljson -bare service-account
 
 ```
@@ -370,30 +360,46 @@ service-account.pem
 
 Copy the appropriate certificates and private keys to each worker instance:
 
-```
-for instance in worker-0 worker-1 worker-2; do
-  external_ip=$(aws ec2 describe-instances --filters \
-    "Name=tag:Name,Values=${instance}" \
-    "Name=instance-state-name,Values=running" \
-    --output text --query 'Reservations[].Instances[].PublicIpAddress')
+```powershell
+foreach ($i in (0..2)) {
+  $InstanceName = "worker-$i"
+  $InstanceExtIp = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
+    -Filter @(
+      @{
+        Name = 'tag:Name'
+        Values = $InstanceName
+      }
+      @{
+        Name = 'instance-state-name'
+        Values = 'running'
+      }      
+    )
+  ).Instances.PublicIpAddress
 
-  scp -i kubernetes.id_rsa ca.pem ${instance}-key.pem ${instance}.pem ubuntu@${external_ip}:~/
-done
+  scp -i kubernetes.id_rsa ca.pem "$InstanceName-key.pem" "$InstanceName.pem" "ubuntu@${InstanceExtIp}:~/"
+}
 ```
 
 Copy the appropriate certificates and private keys to each controller instance:
 
-```
-for instance in controller-0 controller-1 controller-2; do
-  external_ip=$(aws ec2 describe-instances --filters \
-    "Name=tag:Name,Values=${instance}" \
-    "Name=instance-state-name,Values=running" \
-    --output text --query 'Reservations[].Instances[].PublicIpAddress')
+```powershell
+foreach ($i in (0..2)) {
+  $InstanceName = "controller-$i"
+  $InstanceExtIp = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
+    -Filter @(
+      @{
+        Name = 'tag:Name'
+        Values = $InstanceName
+      }
+      @{
+        Name = 'instance-state-name'
+        Values = 'running'
+      }      
+    )
+  ).Instances.PublicIpAddress
 
-  scp -i kubernetes.id_rsa \
-    ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem \
-    service-account-key.pem service-account.pem ubuntu@${external_ip}:~/
-done
+  scp -i kubernetes.id_rsa ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem service-account-key.pem service-account.pem "ubuntu@${InstanceExtIp}:~/"
+}
 ```
 
 > The `kube-proxy`, `kube-controller-manager`, `kube-scheduler`, and `kubelet` client certificates will be used to generate client authentication configuration files in the next lab.
