@@ -6,153 +6,215 @@
 
 ### VPC
 
-```sh
-VPC_ID=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --output text --query 'Vpc.VpcId')
-aws ec2 create-tags --resources ${VPC_ID} --tags Key=Name,Value=kubernetes-the-hard-way
-aws ec2 modify-vpc-attribute --vpc-id ${VPC_ID} --enable-dns-support '{"Value": true}'
-aws ec2 modify-vpc-attribute --vpc-id ${VPC_ID} --enable-dns-hostnames '{"Value": true}'
+```powershell
+$Vpc = New-EC2Vpc -ProfileName $env:AWS_PROFILE `
+  -CidrBlock '172.16.0.0/16'
+New-EC2Tag -ProfileName $env:AWS_PROFILE `
+  -Resource $Vpc.VpcId `
+  -Tags ([Amazon.EC2.Model.Tag]::new('Name','kubernetes-the-hard-way'))
+Edit-EC2VpcAttribute -ProfileName $env:AWS_PROFILE `
+  -VpcId $Vpc.VpcId `
+  -EnableDnsSupport $true
+Edit-EC2VpcAttribute -ProfileName $env:AWS_PROFILE `
+  -VpcId $Vpc.VpcId `
+  -EnableDnsHostname $true
+
 ```
 
 ### Subnet
 
-```sh
-SUBNET_ID=$(aws ec2 create-subnet \
-  --vpc-id ${VPC_ID} \
-  --cidr-block 10.0.1.0/24 \
-  --output text --query 'Subnet.SubnetId')
-aws ec2 create-tags --resources ${SUBNET_ID} --tags Key=Name,Value=kubernetes
+```powershell
+$Subnet = New-EC2Subnet -ProfileName $env:AWS_PROFILE `
+  -VpcId $Vpc.VpcId `
+  -CidrBlock '172.16.1.0/24'
+New-EC2Tag -ProfileName $env:AWS_PROFILE `
+  -Resource $Subnet.SubnetId `
+  -Tags ([Amazon.EC2.Model.Tag]::new('Name','kubernetes'))
 ```
 
 ### Internet Gateway
 
-```sh
-INTERNET_GATEWAY_ID=$(aws ec2 create-internet-gateway --output text --query 'InternetGateway.InternetGatewayId')
-aws ec2 create-tags --resources ${INTERNET_GATEWAY_ID} --tags Key=Name,Value=kubernetes
-aws ec2 attach-internet-gateway --internet-gateway-id ${INTERNET_GATEWAY_ID} --vpc-id ${VPC_ID}
+```powershell
+$InternetGateway = New-EC2InternetGateway -ProfileName $env:AWS_PROFILE
+New-EC2Tag -ProfileName $env:AWS_PROFILE `
+  -Resource $InternetGateway.InternetGatewayId `
+  -Tags ([Amazon.EC2.Model.Tag]::new('Name','kubernetes'))
+Add-EC2InternetGateway -ProfileName $env:AWS_PROFILE `
+  -VpcId $Vpc.VpcId `
+  -InternetGatewayId $InternetGateway.InternetGatewayId
 ```
 
 ### Route Tables
 
-```sh
-ROUTE_TABLE_ID=$(aws ec2 create-route-table --vpc-id ${VPC_ID} --output text --query 'RouteTable.RouteTableId')
-aws ec2 create-tags --resources ${ROUTE_TABLE_ID} --tags Key=Name,Value=kubernetes
-aws ec2 associate-route-table --route-table-id ${ROUTE_TABLE_ID} --subnet-id ${SUBNET_ID}
-aws ec2 create-route --route-table-id ${ROUTE_TABLE_ID} --destination-cidr-block 0.0.0.0/0 --gateway-id ${INTERNET_GATEWAY_ID}
+```powershell
+$RouteTable = New-EC2RouteTable -ProfileName $env:AWS_PROFILE `
+  -VpcId $Vpc.VpcId
+New-EC2Tag -ProfileName $env:AWS_PROFILE `
+  -Resource $RouteTable.RouteTableId `
+  -Tags ([Amazon.EC2.Model.Tag]::new('Name','kubernetes'))
+Register-EC2RouteTable -ProfileName $env:AWS_PROFILE `
+  -RouteTableId $RouteTable.RouteTableId `
+  -SubnetId $Subnet.SubnetId
+New-EC2Route -ProfileName $env:AWS_PROFILE `
+  -RouteTableId $RouteTable.RouteTableId `
+  -DestinationCidrBlock '0.0.0.0/0' `
+  -GatewayId $InternetGateway.InternetGatewayId
 ```
 
 ### Security Groups (aka Firewall Rules)
 
-```sh
-SECURITY_GROUP_ID=$(aws ec2 create-security-group \
-  --group-name kubernetes \
-  --description "Kubernetes security group" \
-  --vpc-id ${VPC_ID} \
-  --output text --query 'GroupId')
-aws ec2 create-tags --resources ${SECURITY_GROUP_ID} --tags Key=Name,Value=kubernetes
-aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol all --cidr 10.0.0.0/16
-aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol all --cidr 10.200.0.0/16
-aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol tcp --port 22 --cidr 0.0.0.0/0
-aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol tcp --port 6443 --cidr 0.0.0.0/0
-aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol tcp --port 443 --cidr 0.0.0.0/0
-aws ec2 authorize-security-group-ingress --group-id ${SECURITY_GROUP_ID} --protocol icmp --port -1 --cidr 0.0.0.0/0
+```powershell
+$SecurityGroup = New-EC2SecurityGroup -ProfileName $env:AWS_PROFILE `
+  -GroupName 'kuberbnetes' `
+  -Description 'Kubernetes security group' `
+  -VpcId $Vpc.VpcId
+New-EC2Tag -ProfileName $env:AWS_PROFILE `
+  -Resource $SecurityGroup `
+  -Tags ([Amazon.EC2.Model.Tag]::new('Name','kubernetes'))
+Grant-EC2SecurityGroupIngress -ProfileName $env:AWS_PROFILE `
+  -GroupId $SecurityGroup 
+  -IpPermission @{IpProtocol='all'; IpRanges='172.16.0.0/16'}
+Grant-EC2SecurityGroupIngress -ProfileName $env:AWS_PROFILE `
+  -GroupId $SecurityGroup `
+  -IpPermission @{IpProtocol='all'; IpRanges='172.17.0.0/16'}
+Grant-EC2SecurityGroupIngress -ProfileName $env:AWS_PROFILE `
+  -GroupId $SecurityGroup `
+  -IpPermission @{IpProtocol='tcp'; ToPort=22; FromPort=22; IpRanges='0.0.0.0/0'}
+Grant-EC2SecurityGroupIngress -ProfileName $env:AWS_PROFILE `
+  -GroupId $SecurityGroup `
+  -IpPermission @{IpProtocol='tcp'; ToPort=6443; FromPort=6443; IpRanges='0.0.0.0/0'}
+Grant-EC2SecurityGroupIngress -ProfileName $env:AWS_PROFILE `
+  -GroupId $SecurityGroup `
+  -IpPermission @{IpProtocol='tcp'; ToPort=443; FromPort=443; IpRanges='0.0.0.0/0'}
+Grant-EC2SecurityGroupIngress -ProfileName $env:AWS_PROFILE `
+  -GroupId $SecurityGroup `
+  -IpPermission @{IpProtocol='icmp'; ToPort=-1; FromPort=-1; IpRanges='0.0.0.0/0'}
 ```
 
 ### Kubernetes Public Access - Create a Network Load Balancer
 
-```sh
-  LOAD_BALANCER_ARN=$(aws elbv2 create-load-balancer \
-    --name kubernetes \
-    --subnets ${SUBNET_ID} \
-    --scheme internet-facing \
-    --type network \
-    --output text --query 'LoadBalancers[].LoadBalancerArn')
-  TARGET_GROUP_ARN=$(aws elbv2 create-target-group \
-    --name kubernetes \
-    --protocol TCP \
-    --port 6443 \
-    --vpc-id ${VPC_ID} \
-    --target-type ip \
-    --output text --query 'TargetGroups[].TargetGroupArn')
-  aws elbv2 register-targets --target-group-arn ${TARGET_GROUP_ARN} --targets Id=10.0.1.1{0,1,2}
-  aws elbv2 create-listener \
-    --load-balancer-arn ${LOAD_BALANCER_ARN} \
-    --protocol TCP \
-    --port 443 \
-    --default-actions Type=forward,TargetGroupArn=${TARGET_GROUP_ARN} \
-    --output text --query 'Listeners[].ListenerArn'
+```powershell
+$LoadBalancer = New-ELB2LoadBalancer -ProfileName $env:AWS_PROFILE `
+  -Name 'kubernetes' `
+  -Subnet $Subnet.SubnetId `
+  -Scheme internet-facing `
+  -Type network
+$TargetGroup = New-ELB2TargetGroup -ProfileName $env:AWS_PROFILE `
+  -Name 'kubernetes' `
+  -Protocol TCP `
+  -Port 6443 `
+  -VpcId $vpc.VpcId `
+  -TargetType ip
+Register-ELB2Target -ProfileName $env:AWS_PROFILE `
+  -TargetGroupArn $TargetGroup.TargetGroupArn `
+  -Targets @{Id = '172.16.1.10'},@{Id = '172.16.1.11'},@{Id = '172.16.1.12'}
+New-ELB2Listener -ProfileName $env:AWS_PROFILE `
+  -LoadBalancerArn $LoadBalancer.LoadBalancerArn `
+  -Protocol TCP `
+  -Port 443 `
+  -DefaultAction @{Type = 'forward'; TargetGroupArn = $TargetGroup.TargetGroupArn} 
 ```
 
-```sh
-KUBERNETES_PUBLIC_ADDRESS=$(aws elbv2 describe-load-balancers \
-  --load-balancer-arns ${LOAD_BALANCER_ARN} \
-  --output text --query 'LoadBalancers[].DNSName')
+```powershell
+$KubernetesPublicAddress = $LoadBalancer.DNSName
+# KUBERNETES_PUBLIC_ADDRESS=$(aws elbv2 describe-load-balancers --load-balancer-arns ${LOAD_BALANCER_ARN} --output text --query 'LoadBalancers[].DNSName')
 ```
 
 ## Compute Instances
 
 ### Instance Image
 
-```sh
-IMAGE_ID=$(aws ec2 describe-images --owners 099720109477 \
-  --output json \
-  --filters \
-  'Name=root-device-type,Values=ebs' \
-  'Name=architecture,Values=x86_64' \
-  'Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*' \
-  | jq -r '.Images|sort_by(.Name)[-1]|.ImageId')
+```powershell
+$ImageUbuntu = Get-EC2Image -ProfileName $env:AWS_PROFILE `
+  -Owner 099720109477 `
+  -Filter @(
+    @{ Name='root-device-type'; Values='ebs' }
+    @{ Name='architecture'; Values='x86_64'}
+    @{ Name='name'; Values='ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*'}
+  ) `
+  | Sort-Object -Property Name -Descending | Select-Object -First 1
 ```
 
 ### SSH Key Pair
 
-```sh
-aws ec2 create-key-pair --key-name kubernetes --output text --query 'KeyMaterial' > kubernetes.id_rsa
-chmod 600 kubernetes.id_rsa
+```powershell
+New-EC2KeyPair -ProfileName $env:AWS_PROFILE `
+  -KeyName 'kubernetes' `
+  | Select-Object -ExpandProperty KeyMaterial | Out-File kubernetes.id_rsa
+
+# chmod 600 kubernetes.id_rsa
 ```
 
 ### Kubernetes Controllers
 
 Using `t3.micro` instances
 
-```sh
-for i in 0 1 2; do
-  instance_id=$(aws ec2 run-instances \
-    --associate-public-ip-address \
-    --image-id ${IMAGE_ID} \
-    --count 1 \
-    --key-name kubernetes \
-    --security-group-ids ${SECURITY_GROUP_ID} \
-    --instance-type t3.micro \
-    --private-ip-address 10.0.1.1${i} \
-    --user-data "name=controller-${i}" \
-    --subnet-id ${SUBNET_ID} \
-    --block-device-mappings='{"DeviceName": "/dev/sda1", "Ebs": { "VolumeSize": 50 }, "NoDevice": "" }' \
-    --output text --query 'Instances[].InstanceId')
-  aws ec2 modify-instance-attribute --instance-id ${instance_id} --no-source-dest-check
-  aws ec2 create-tags --resources ${instance_id} --tags "Key=Name,Value=controller-${i}"
-  echo "controller-${i} created "
-done
+```powershell
+foreach ($i in (0..2)){
+  $Instance = New-EC2Instance -ProfileName $env:AWS_PROFILE `
+    -ImageId $ImageUbuntu.ImageId `
+    -AssociatePublicIp $true `
+    -MaxCount 1 `
+    -KeyName 'kubernetes' `
+    -SecurityGroupId $SecurityGroup `
+    -InstanceType 't3.micro' `
+    -PrivateIpAddress "172.16.1.1$i" `
+    -SubnetId $Subnet.SubnetId `
+    -BlockDeviceMapping @{
+      DeviceName = '/dev/sda1'
+      Ebs = @{ 
+        VolumeSize = 50 
+      }
+      NoDevice = ''
+    } `
+    -UserData "name=controller-$i" `
+    -EncodeUserData
+
+  Edit-EC2InstanceAttribute -ProfileName $env:AWS_PROFILE `
+    -InstanceId $Instance.Instances[0].InstanceId `
+    -SourceDestCheck $false
+
+  New-EC2Tag -ProfileName $env:AWS_PROFILE `
+    -Resource $Instance.Instances[0].InstanceId `
+    -Tags ([Amazon.EC2.Model.Tag]::new('Name',"controller-$i"))
+  
+  Write-Host "EC2 Instance 'controller-$i' ($($Instance.Instances[0].InstanceId)) created"
+}
 ```
 
 ### Kubernetes Workers
 
-```sh
-for i in 0 1 2; do
-  instance_id=$(aws ec2 run-instances \
-    --associate-public-ip-address \
-    --image-id ${IMAGE_ID} \
-    --count 1 \
-    --key-name kubernetes \
-    --security-group-ids ${SECURITY_GROUP_ID} \
-    --instance-type t3.micro \
-    --private-ip-address 10.0.1.2${i} \
-    --user-data "name=worker-${i}|pod-cidr=10.200.${i}.0/24" \
-    --subnet-id ${SUBNET_ID} \
-    --block-device-mappings='{"DeviceName": "/dev/sda1", "Ebs": { "VolumeSize": 50 }, "NoDevice": "" }' \
-    --output text --query 'Instances[].InstanceId')
-  aws ec2 modify-instance-attribute --instance-id ${instance_id} --no-source-dest-check
-  aws ec2 create-tags --resources ${instance_id} --tags "Key=Name,Value=worker-${i}"
-  echo "worker-${i} created"
-done
+```powershell
+foreach ($i in (0..2)){
+  $Instance = New-EC2Instance -ProfileName $env:AWS_PROFILE `
+    -ImageId $ImageUbuntu.ImageId `
+    -AssociatePublicIp $true `
+    -MaxCount 1 `
+    -KeyName 'kubernetes' `
+    -SecurityGroupId $SecurityGroup `
+    -InstanceType 't3.micro' `
+    -PrivateIpAddress "172.16.1.2$i" `
+    -SubnetId $Subnet.SubnetId `
+    -BlockDeviceMapping @{
+      DeviceName = '/dev/sda1'
+      Ebs = @{ 
+        VolumeSize = 50 
+      }
+      NoDevice = ''
+    } `
+    -UserData "name=worker-$i|pod-cidr=176.17.${i}.0/24" `
+    -EncodeUserData
+
+  Edit-EC2InstanceAttribute -ProfileName $env:AWS_PROFILE `
+    -InstanceId $Instance.Instances[0].InstanceId `
+    -SourceDestCheck $false
+
+  New-EC2Tag -ProfileName $env:AWS_PROFILE `
+    -Resource $Instance.Instances[0].InstanceId `
+    -Tags ([Amazon.EC2.Model.Tag]::new('Name',"worker-$i"))
+  
+  Write-Host "EC2 Instance 'worker-$i' ($($Instance.Instances[0].InstanceId)) created"
+}
 ```
 
 Next: [Certificate Authority](04-certificate-authority.md)
