@@ -8,16 +8,16 @@ In this lab you will generate an encryption key and an [encryption config](https
 
 Generate an encryption key:
 
-```
-ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64)
+```powershell
+$EncryptionKey = (New-Guid).ToString().Replace('-','')
 ```
 
 ## The Encryption Config File
 
 Create the `encryption-config.yaml` encryption config file:
 
-```
-cat > encryption-config.yaml <<EOF
+```powershell
+@"
 kind: EncryptionConfig
 apiVersion: v1
 resources:
@@ -27,22 +27,31 @@ resources:
       - aescbc:
           keys:
             - name: key1
-              secret: ${ENCRYPTION_KEY}
+              secret: $EncryptionKey
       - identity: {}
-EOF
+"@ | Out-File -Encoding ascii encryption-config.yaml
 ```
 
 Copy the `encryption-config.yaml` encryption config file to each controller instance:
 
-```
-for instance in controller-0 controller-1 controller-2; do
-  external_ip=$(aws ec2 describe-instances --filters \
-    "Name=tag:Name,Values=${instance}" \
-    "Name=instance-state-name,Values=running" \
-    --output text --query 'Reservations[].Instances[].PublicIpAddress')
-  
-  scp -i kubernetes.id_rsa encryption-config.yaml ubuntu@${external_ip}:~/
-done
+```powershell
+foreach ($i in (0..2)) {
+  $InstanceName = "controller-$i"
+  $InstanceExtIp = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
+    -Filter @(
+      @{
+        Name = 'tag:Name'
+        Values = $InstanceName
+      }
+      @{
+        Name = 'instance-state-name'
+        Values = 'running'
+      }      
+    )
+  ).Instances.PublicIpAddress
+
+  scp -i kubernetes.id_rsa encryption-config.yaml "ubuntu@${InstanceExtIp}:~/"
+}
 ```
 
 Next: [Bootstrapping the etcd Cluster](07-bootstrapping-etcd.md)
