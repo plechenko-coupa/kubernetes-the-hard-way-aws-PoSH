@@ -45,6 +45,29 @@ chmod +x cfssl cfssljson
 ```
 sudo mv cfssl cfssljson /usr/local/bin/
 ```
+### Windows
+
+Create the local `bin` directory and add it to `$Env:PATH`.
+
+```
+$BinDir = Join-Path -Path $env:USERPROFILE -ChildPath bin
+New-Item -Path $BinDir -ItemType Directory -Force
+if ($env:Path -split ';' -notcontains $BinDir) {
+  [Environment]::SetEnvironmentVariable('PATH', $Env:PATH + ";$BinDir", [EnvironmentVariableTarget]::User)
+}
+```
+
+Download the latest released Windows binaries from [CFSSL Releases Page](https://github.com/cloudflare/cfssl/releases) and copy them to the local bin directory.
+
+```
+$BinDir = Join-Path -Path $env:USERPROFILE -ChildPath bin
+$Releases = Invoke-RestMethod -UseBasicParsing -Uri 'https://api.github.com/repos/cloudflare/cfssl/releases/latest'
+@($Releases.assets | Where-Object name -Like '*_windows_amd64.exe') | ForEach-Object {
+  $OutFile = Join-Path -Path $BinDir -ChildPath (($_.Name -split '_')[0] + '.exe')
+  Write-Host "Downloading $($_.browser_download_url) to $OutFile"
+  Invoke-WebRequest -Uri $_.browser_download_url -OutFile $OutFile
+}
+```
 
 ### Verification
 
@@ -99,6 +122,14 @@ chmod +x kubectl
 
 ```
 sudo mv kubectl /usr/local/bin/
+```
+
+### Windows
+
+Follow the [official kubectl installation instruction](https://kubernetes.io/docs/tasks/tools/install-kubectl-windows/) or install Chocolatey package `kubernetes-cli`:
+
+```
+choco install kubernetes-cli
 ```
 
 ### Verification

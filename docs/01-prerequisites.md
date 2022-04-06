@@ -18,6 +18,16 @@ Verify the AWS CLI version using:
 aws --version
 ```
 
+### Install the AWS Tools for PowerShell
+
+Follow the AWS Tools for PowerShell [documentation](https://aws.amazon.com/powershell/).
+
+Verify the AWS Tools for PowerShell version using:
+
+```
+Get-AWSPowerShellVersion -ListServiceVersionInfo
+```
+
 ### Set a Default Compute Region and Zone
 
 This tutorial assumes a default compute region and zone have been configured.
@@ -25,7 +35,7 @@ This tutorial assumes a default compute region and zone have been configured.
 Go ahead and set a default compute region:
 
 ```
-AWS_REGION=us-west-1
+$env:AWS_REGION=us-west-1
 
 aws configure set default.region $AWS_REGION
 ```
