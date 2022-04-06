@@ -74,6 +74,7 @@ foreach ($i in $ControllerIPs.Keys) {
   ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
 }
 ```
+
 ### Configure the etcd Server
 
 ```powershell

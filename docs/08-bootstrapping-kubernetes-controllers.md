@@ -6,15 +6,28 @@ In this lab you will bootstrap the Kubernetes control plane across three compute
 
 The commands in this lab must be run on each controller instance: `controller-0`, `controller-1`, and `controller-2`. Login to each controller instance using the `ssh` command. Example:
 
-```
-for instance in controller-0 controller-1 controller-2; do
-  external_ip=$(aws ec2 describe-instances --filters \
-    "Name=tag:Name,Values=${instance}" \
-    "Name=instance-state-name,Values=running" \
-    --output text --query 'Reservations[].Instances[].PublicIpAddress')
+```powershell
+$ControllerIPs = @{}
 
-  echo ssh -i kubernetes.id_rsa ubuntu@$external_ip
-done
+foreach ($i in (0..2)) {
+  $InstanceName = "controller-$i"
+  $InstanceExtIp = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
+    -Filter @(
+      @{
+        Name = 'tag:Name'
+        Values = $InstanceName
+      }
+      @{
+        Name = 'instance-state-name'
+        Values = 'running'
+      }      
+    )
+  ).Instances.PublicIpAddress
+
+  $ControllerIPs[$InstanceName] = $InstanceExtIp
+
+  Write-Host "ssh -i kubernetes.id_rsa ubuntu@$InstanceExtIp"
+}
 ```
 
 Now ssh into each one of the IP addresses received in last step.
@@ -25,50 +38,66 @@ Now ssh into each one of the IP addresses received in last step.
 
 ## Provision the Kubernetes Control Plane
 
-Create the Kubernetes configuration directory:
+Create the Kubernetes configuration directory
 
-```
+Download the official Kubernetes release binaries
+
+Install the Kubernetes binaries
+
+```powershell
+$SshScript = @'
+K8S_VER=v1.21.0
+
+DOWNLOAD_URL=\"https://storage.googleapis.com/kubernetes-release/release/${K8S_VER}/bin/linux/amd64\"
+
+#Create the Kubernetes configuration directory
 sudo mkdir -p /etc/kubernetes/config
-```
 
-### Download and Install the Kubernetes Controller Binaries
-
-Download the official Kubernetes release binaries:
-
-```
+#Download the official Kubernetes release binaries
 wget -q --show-progress --https-only --timestamping \
-  "https://storage.googleapis.com/kubernetes-release/release/v1.21.0/bin/linux/amd64/kube-apiserver" \
-  "https://storage.googleapis.com/kubernetes-release/release/v1.21.0/bin/linux/amd64/kube-controller-manager" \
-  "https://storage.googleapis.com/kubernetes-release/release/v1.21.0/bin/linux/amd64/kube-scheduler" \
-  "https://storage.googleapis.com/kubernetes-release/release/v1.21.0/bin/linux/amd64/kubectl"
-```
+  \"${DOWNLOAD_URL}/kube-apiserver\" \
+  \"${DOWNLOAD_URL}/kube-controller-manager\" \
+  \"${DOWNLOAD_URL}/kube-scheduler\" \
+  \"${DOWNLOAD_URL}/kubectl\"
 
-Install the Kubernetes binaries:
-
-```
+#Install the Kubernetes binaries
 chmod +x kube-apiserver kube-controller-manager kube-scheduler kubectl
 sudo mv kube-apiserver kube-controller-manager kube-scheduler kubectl /usr/local/bin/
+'@
+foreach ($i in $ControllerIPs.Keys) {
+  $ip = $ControllerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 ### Configure the Kubernetes API Server
 
-```
+```powershell
+$SshScript = @'
 sudo mkdir -p /var/lib/kubernetes/
 
 sudo mv ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem \
   service-account-key.pem service-account.pem \
   encryption-config.yaml /var/lib/kubernetes/
+'@
+foreach ($i in $ControllerIPs.Keys) {
+  $ip = $ControllerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
-The instance internal IP address will be used to advertise the API Server to members of the cluster. Retrieve the internal IP address for the current compute instance:
-
-```
-INTERNAL_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
-```
+The instance internal IP address will be used to advertise the API Server to members of the cluster.
 
 Create the `kube-apiserver.service` systemd unit file:
 
-```
+```powershell
+$KubernetesPublicAddress = (Get-ELB2LoadBalancer -ProfileName $env:AWS_PROFILE -Name 'kubernetes').DNSName
+
+$SshScript = @"
+INTERNAL_IP=`$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+
 cat <<EOF | sudo tee /etc/systemd/system/kube-apiserver.service
 [Unit]
 Description=Kubernetes API Server
@@ -76,7 +105,7 @@ Documentation=https://github.com/kubernetes/kubernetes
 
 [Service]
 ExecStart=/usr/local/bin/kube-apiserver \\
-  --advertise-address=${INTERNAL_IP} \\
+  --advertise-address=`${INTERNAL_IP} \\
   --allow-privileged=true \\
   --apiserver-count=3 \\
   --audit-log-maxage=30 \\
@@ -90,7 +119,7 @@ ExecStart=/usr/local/bin/kube-apiserver \\
   --etcd-cafile=/var/lib/kubernetes/ca.pem \\
   --etcd-certfile=/var/lib/kubernetes/kubernetes.pem \\
   --etcd-keyfile=/var/lib/kubernetes/kubernetes-key.pem \\
-  --etcd-servers=https://10.0.1.10:2379,https://10.0.1.11:2379,https://10.0.1.12:2379 \\
+  --etcd-servers=https://172.16.1.10:2379,https://172.16.1.11:2379,https://172.16.1.12:2379 \\
   --event-ttl=1h \\
   --encryption-provider-config=/var/lib/kubernetes/encryption-config.yaml \\
   --kubelet-certificate-authority=/var/lib/kubernetes/ca.pem \\
@@ -99,7 +128,7 @@ ExecStart=/usr/local/bin/kube-apiserver \\
   --runtime-config='api/all=true' \\
   --service-account-key-file=/var/lib/kubernetes/service-account.pem \\
   --service-account-signing-key-file=/var/lib/kubernetes/service-account-key.pem \\
-  --service-account-issuer=https://${KUBERNETES_PUBLIC_ADDRESS}:443 \\
+  --service-account-issuer=https://${KubernetesPublicAddress}:443 \\
   --service-cluster-ip-range=10.32.0.0/24 \\
   --service-node-port-range=30000-32767 \\
   --tls-cert-file=/var/lib/kubernetes/kubernetes.pem \\
@@ -111,19 +140,24 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+"@
+foreach ($i in $ControllerIPs.Keys) {
+  $ip = $ControllerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 ### Configure the Kubernetes Controller Manager
 
-Move the `kube-controller-manager` kubeconfig into place:
+Move the `kube-controller-manager` kubeconfig into `/var/lib/kubernetes/`.
 
-```
+Create the `kube-controller-manager.service` systemd unit file
+
+```powershell
+$SshScript = @'
 sudo mv kube-controller-manager.kubeconfig /var/lib/kubernetes/
-```
 
-Create the `kube-controller-manager.service` systemd unit file:
-
-```
 cat <<EOF | sudo tee /etc/systemd/system/kube-controller-manager.service
 [Unit]
 Description=Kubernetes Controller Manager
@@ -132,7 +166,7 @@ Documentation=https://github.com/kubernetes/kubernetes
 [Service]
 ExecStart=/usr/local/bin/kube-controller-manager \\
   --bind-address=0.0.0.0 \\
-  --cluster-cidr=10.200.0.0/16 \\
+  --cluster-cidr=172.17.0.0/16 \\
   --cluster-name=kubernetes \\
   --cluster-signing-cert-file=/var/lib/kubernetes/ca.pem \\
   --cluster-signing-key-file=/var/lib/kubernetes/ca-key.pem \\
@@ -140,7 +174,7 @@ ExecStart=/usr/local/bin/kube-controller-manager \\
   --leader-elect=true \\
   --root-ca-file=/var/lib/kubernetes/ca.pem \\
   --service-account-private-key-file=/var/lib/kubernetes/service-account-key.pem \\
-  --service-cluster-ip-range=10.32.0.0/24 \\
+  --service-cluster-ip-range=172.18.0.0/24 \\
   --use-service-account-credentials=true \\
   --v=2
 Restart=on-failure
@@ -149,32 +183,38 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+'@
+foreach ($i in $ControllerIPs.Keys) {
+  $ip = $ControllerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 ### Configure the Kubernetes Scheduler
 
-Move the `kube-scheduler` kubeconfig into place:
+Move the `kube-scheduler` kubeconfig into `/var/lib/kubernetes/`
 
-```
+Create the `kube-scheduler.yaml` configuration file
+
+Create the `kube-scheduler.service` systemd unit file
+
+```powershell
+$SshScript = @'
+# Move the `kube-scheduler` kubeconfig into `/var/lib/kubernetes/`
 sudo mv kube-scheduler.kubeconfig /var/lib/kubernetes/
-```
 
-Create the `kube-scheduler.yaml` configuration file:
-
-```
+# Create the `kube-scheduler.yaml` configuration file
 cat <<EOF | sudo tee /etc/kubernetes/config/kube-scheduler.yaml
 apiVersion: kubescheduler.config.k8s.io/v1beta1
 kind: KubeSchedulerConfiguration
 clientConnection:
-  kubeconfig: "/var/lib/kubernetes/kube-scheduler.kubeconfig"
+  kubeconfig: \"/var/lib/kubernetes/kube-scheduler.kubeconfig\"
 leaderElection:
   leaderElect: true
 EOF
-```
 
-Create the `kube-scheduler.service` systemd unit file:
-
-```
+# Create the `kube-scheduler.service` systemd unit file
 cat <<EOF | sudo tee /etc/systemd/system/kube-scheduler.service
 [Unit]
 Description=Kubernetes Scheduler
@@ -190,22 +230,42 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+'@
+foreach ($i in $ControllerIPs.Keys) {
+  $ip = $ControllerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 ### Start the Controller Services
 
-```
+```powershell
+$SshScript = @'
 sudo systemctl daemon-reload
 sudo systemctl enable kube-apiserver kube-controller-manager kube-scheduler
 sudo systemctl start kube-apiserver kube-controller-manager kube-scheduler
+'@
+foreach ($i in $ControllerIPs.Keys) {
+  $ip = $ControllerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 > Allow up to 10 seconds for the Kubernetes API Server to fully initialize.
 
 ### Verification
 
-```
+```powershell
+$SshScript = @'
 kubectl cluster-info --kubeconfig admin.kubeconfig
+'@
+foreach ($i in $ControllerIPs.Keys) {
+  $ip = $ControllerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 ```
@@ -221,12 +281,19 @@ be able to resolve the worker hostnames.  This is not set up by default in
 AWS.  The workaround is to add manual host entries on each of the controller
 nodes with this command:
 
-```
-cat <<EOF | sudo tee -a /etc/hosts
-10.0.1.20 ip-10-0-1-20
-10.0.1.21 ip-10-0-1-21
-10.0.1.22 ip-10-0-1-22
-EOF
+```powershell
+$SshScript = @'
+for i in 0 1 2
+do
+  hostsline=\"172.16.1.2$i ip-172-16-1-2$i\"
+  grep \"$hostsline\" /etc/hosts || (echo \"$hostsline\" | sudo tee -a /etc/hosts)
+done
+'@
+foreach ($i in $ControllerIPs.Keys) {
+  $ip = $ControllerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 > If this step is missed, the [DNS Cluster Add-on](12-dns-addon.md) testing will
@@ -240,30 +307,22 @@ In this section you will configure RBAC permissions to allow the Kubernetes API 
 
 The commands in this section will effect the entire cluster and only need to be run once from one of the controller nodes.
 
-```
-external_ip=$(aws ec2 describe-instances --filters \
-    "Name=tag:Name,Values=controller-0" \
-    "Name=instance-state-name,Values=running" \
-    --output text --query 'Reservations[].Instances[].PublicIpAddress')
-
-ssh -i kubernetes.id_rsa ubuntu@${external_ip}
-```
-
 Create the `system:kube-apiserver-to-kubelet` [ClusterRole](https://kubernetes.io/docs/admin/authorization/rbac/#role-and-clusterrole) with permissions to access the Kubelet API and perform most common tasks associated with managing pods:
 
-```
+```powershell
+$SshScript = @'
 cat <<EOF | kubectl apply --kubeconfig admin.kubeconfig -f -
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   annotations:
-    rbac.authorization.kubernetes.io/autoupdate: "true"
+    rbac.authorization.kubernetes.io/autoupdate: \"true\"
   labels:
     kubernetes.io/bootstrapping: rbac-defaults
   name: system:kube-apiserver-to-kubelet
 rules:
   - apiGroups:
-      - ""
+      - \"\"
     resources:
       - nodes/proxy
       - nodes/stats
@@ -271,21 +330,26 @@ rules:
       - nodes/spec
       - nodes/metrics
     verbs:
-      - "*"
+      - \"*\"
 EOF
+'@
+$ip = $ControllerIPs['controller-0']
+Write-Host "Invoking script on $i ($ip)"
+ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
 ```
 
 The Kubernetes API Server authenticates to the Kubelet as the `kubernetes` user using the client certificate as defined by the `--kubelet-client-certificate` flag.
 
 Bind the `system:kube-apiserver-to-kubelet` ClusterRole to the `kubernetes` user:
 
-```
+```powershell
+$SshScript = @'
 cat <<EOF | kubectl apply --kubeconfig admin.kubeconfig -f -
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: system:kube-apiserver
-  namespace: ""
+  namespace: \"\"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -295,24 +359,21 @@ subjects:
     kind: User
     name: kubernetes
 EOF
+'@
+$ip = $ControllerIPs['controller-0']
+Write-Host "Invoking script on $i ($ip)"
+ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
 ```
 
 ### Verification of cluster public endpoint
 
 > The compute instances created in this tutorial will not have permission to complete this section. **Run the following commands from the same machine used to create the compute instances**.
 
-Retrieve the `kubernetes-the-hard-way` Load Balancer address:
+Make an HTTPS request for the Kubernetes version info:
 
-```
-KUBERNETES_PUBLIC_ADDRESS=$(aws elbv2 describe-load-balancers \
-  --load-balancer-arns ${LOAD_BALANCER_ARN} \
-  --output text --query 'LoadBalancers[].DNSName')
-```
-
-Make a HTTP request for the Kubernetes version info:
-
-```
-curl --cacert ca.pem https://${KUBERNETES_PUBLIC_ADDRESS}/version
+```powershell
+$KubernetesPublicAddress = (Get-ELB2LoadBalancer -ProfileName $env:AWS_PROFILE -Name 'kubernetes').DNSName
+curl.exe --cacert ca.pem "https://$KubernetesPublicAddress/version" -k
 ```
 
 > output
