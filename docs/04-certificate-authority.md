@@ -105,7 +105,7 @@ Generate a certificate and private key for each Kubernetes worker node:
 ```powershell
 foreach ($i in (0..2)){
   $InstanceName="worker-$i"
-  $InstanceHostname="ip-10-0-1-2$i"
+  $InstanceHostname="ip-172-16-1-2$i"
 
   @{
     CN = "system:node:$InstanceHostname"
