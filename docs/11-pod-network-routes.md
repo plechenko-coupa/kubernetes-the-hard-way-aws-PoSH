@@ -8,103 +8,97 @@ In this lab you will create a route for each worker node that maps the node's Po
 
 ## The Routing Table and routes
 
-In this section you will gather the information required to create routes in the `kubernetes-the-hard-way` VPC network and use that to create route table entries. 
+In this section you will gather the information required to create routes in the `kubernetes-the-hard-way` VPC network and use that to create route table entries.
 
 In production workloads this functionality will be provided by CNI plugins like flannel, calico, amazon-vpc-cni-k8s. Doing this by hand makes it easier to understand what those plugins do behind the scenes.
 
 Print the internal IP address and Pod CIDR range for each worker instance and create route table entries:
 
-```sh
-for instance in worker-0 worker-1 worker-2; do
-  instance_id_ip="$(aws ec2 describe-instances \
-    --filters "Name=tag:Name,Values=${instance}" \
-    --output text --query 'Reservations[].Instances[].[InstanceId,PrivateIpAddress]')"
-  instance_id="$(echo "${instance_id_ip}" | cut -f1)"
-  instance_ip="$(echo "${instance_id_ip}" | cut -f2)"
-  pod_cidr="$(aws ec2 describe-instance-attribute \
-    --instance-id "${instance_id}" \
-    --attribute userData \
-    --output text --query 'UserData.Value' \
-    | base64 --decode | tr "|" "\n" | grep "^pod-cidr" | cut -d'=' -f2)"
-  echo "${instance_ip} ${pod_cidr}"
+```powershell
+$WorkerIPs = @{}
 
-  aws ec2 create-route \
-    --route-table-id "${ROUTE_TABLE_ID}" \
-    --destination-cidr-block "${pod_cidr}" \
-    --instance-id "${instance_id}"
-done
+foreach ($i in (0..2)) {
+  $InstanceName = "worker-$i"
+  $Instance = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
+    -Filter @(
+      @{
+        Name = 'tag:Name'
+        Values = $InstanceName
+      }
+      @{
+        Name = 'instance-state-name'
+        Values = 'running'
+      }      
+    )
+  ).Instances[0]
+
+  $InstanceId = $Instance.InstanceId
+  $InstanceIp = $Instance.PrivateIpAddress
+  
+  $InstanceUserData = Get-Ec2InstanceAttribute -ProfileName $env:AWS_PROFILE `
+    -InstanceId $InstanceId `
+    -Attribute userData
+  $PodCidr = ([System.Text.Encoding]::ASCII.GetString(
+      [System.Convert]::FromBase64String($InstanceUserData.UserData)
+    ) -split '\|' `
+    | Where-Object {$_ -like 'pod-cidr*'}) -split '=' `
+    | Select-Object -Last 1
+
+  Write-Host "$InstanceIp $PodCidr"
+
+  $RouteTable = (Get-EC2RouteTable -ProfileName $env:AWS_PROFILE `
+    -Filter @(
+      @{
+        Name = 'tag:Name'
+        Values = 'kubernetes'
+      }
+    )
+  )
+
+  New-EC2Route -ProfileName $env:AWS_PROFILE `
+    -RouteTableId $RouteTable.RouteTableId `
+    -DestinationCidrBlock $PodCidr `
+    -InstanceId $InstanceId
+
+}
 ```
 
 > output
 
-```
-10.0.1.20 10.200.0.0/24
-{
-    "Return": true
-}
-10.0.1.21 10.200.1.0/24
-{
-    "Return": true
-}
-10.0.1.22 10.200.2.0/24
-{
-    "Return": true
-}
+```output
+172.16.1.20 176.17.0.0/24
+True
+172.16.1.21 176.17.1.0/24
+True
+172.16.1.22 176.17.2.0/24
+True
 ```
 
 ## Validate Routes
 
 Validate network routes for each worker instance:
 
-```sh
-aws ec2 describe-route-tables \
-  --route-table-ids "${ROUTE_TABLE_ID}" \
-  --query 'RouteTables[].Routes'
+```powershell
+Get-EC2RouteTable -ProfileName $env:AWS_PROFILE `
+  -Filter @(
+    @{
+      Name = 'tag:Name'
+      Values = 'kubernetes'
+    }
+  ) `
+  | Format-Table
+
 ```
 
 > output
 
-```
-[
-    [
-        {
-            "DestinationCidrBlock": "10.200.0.0/24",
-            "InstanceId": "i-0879fa49c49be1a3e",
-            "InstanceOwnerId": "107995894928",
-            "NetworkInterfaceId": "eni-0612e82f1247c6282",
-            "Origin": "CreateRoute",
-            "State": "active"
-        },
-        {
-            "DestinationCidrBlock": "10.200.1.0/24",
-            "InstanceId": "i-0db245a70483daa43",
-            "InstanceOwnerId": "107995894928",
-            "NetworkInterfaceId": "eni-0db39a19f4f3970f8",
-            "Origin": "CreateRoute",
-            "State": "active"
-        },
-        {
-            "DestinationCidrBlock": "10.200.2.0/24",
-            "InstanceId": "i-0b93625175de8ee43",
-            "InstanceOwnerId": "107995894928",
-            "NetworkInterfaceId": "eni-0cc95f34f747734d3",
-            "Origin": "CreateRoute",
-            "State": "active"
-        },
-        {
-            "DestinationCidrBlock": "10.0.0.0/16",
-            "GatewayId": "local",
-            "Origin": "CreateRouteTable",
-            "State": "active"
-        },
-        {
-            "DestinationCidrBlock": "0.0.0.0/0",
-            "GatewayId": "igw-00d618a99e45fa508",
-            "Origin": "CreateRoute",
-            "State": "active"
-        }
-    ]
-]
+```output
+CarrierGatewayId DestinationCidrBlock DestinationIpv6CidrBlock DestinationPrefixListId EgressOnlyInternetGatewayId GatewayId             InstanceId          InstanceOwnerId LocalGatewayId NatGatewayId
+---------------- -------------------- ------------------------ ----------------------- --------------------------- ---------             ----------          --------------- -------------- ------------
+                 176.17.0.0/24                                                                                                           i-09b469bbe25deff9a 660200843256
+                 176.17.1.0/24                                                                                                           i-0a20f395802486a24 660200843256
+                 172.16.0.0/16                                                                                     local
+                 0.0.0.0/0                                                                                         igw-0ee0f75fa0a1bc4db
 ```
 
 Next: [Deploying the DNS Cluster Add-on](12-dns-addon.md)
