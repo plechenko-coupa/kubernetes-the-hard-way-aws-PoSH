@@ -6,15 +6,28 @@ In this lab you will bootstrap three Kubernetes worker nodes. The following comp
 
 The commands in this lab must be run on each worker instance: `worker-0`, `worker-1`, and `worker-2`. Login to each worker instance using the `ssh` command. Example:
 
-```
-for instance in worker-0 worker-1 worker-2; do
-  external_ip=$(aws ec2 describe-instances --filters \
-    "Name=tag:Name,Values=${instance}" \
-    "Name=instance-state-name,Values=running" \
-    --output text --query 'Reservations[].Instances[].PublicIpAddress')
+```powershell
+$WorkerIPs = @{}
 
-  echo ssh -i kubernetes.id_rsa ubuntu@$external_ip
-done
+foreach ($i in (0..2)) {
+  $InstanceName = "worker-$i"
+  $InstanceExtIp = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
+    -Filter @(
+      @{
+        Name = 'tag:Name'
+        Values = $InstanceName
+      }
+      @{
+        Name = 'instance-state-name'
+        Values = 'running'
+      }      
+    )
+  ).Instances.PublicIpAddress
+
+  $WorkerIPs[$InstanceName] = $InstanceExtIp
+
+  Write-Host "ssh -i kubernetes.id_rsa ubuntu@$InstanceExtIp"
+}
 ```
 
 Now ssh into each one of the IP addresses received in last step.
@@ -27,9 +40,16 @@ Now ssh into each one of the IP addresses received in last step.
 
 Install the OS dependencies:
 
-```
+```powershell
+$SshScript = @'
 sudo apt-get update
 sudo apt-get -y install socat conntrack ipset
+'@
+foreach ($i in $WorkerIPs.Keys) {
+  $ip = $WorkerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 > The socat binary enables support for the `kubectl port-forward` command.
@@ -38,24 +58,29 @@ sudo apt-get -y install socat conntrack ipset
 
 By default the kubelet will fail to start if [swap](https://help.ubuntu.com/community/SwapFaq) is enabled. It is [recommended](https://github.com/kubernetes/kubernetes/issues/7294) that swap be disabled to ensure Kubernetes can provide proper resource allocation and quality of service.
 
-Verify if swap is enabled:
+Disable swap immediately:
 
-```
+```powershell
+$SshScript = @'
 sudo swapon --show
-```
-
-If output is empthy then swap is not enabled. If swap is enabled run the following command to disable swap immediately:
-
-```
 sudo swapoff -a
+sudo swapon --show
+'@
+foreach ($i in $WorkerIPs.Keys) {
+  $ip = $WorkerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 > To ensure swap remains off after reboot consult your Linux distro documentation.
 
 ### Download and Install Worker Binaries
 
-```
-wget -q --show-progress --https-only --timestamping \
+```powershell
+$SshScript = @'
+# Download binaries
+wget --no-verbose --https-only --timestamping \
   https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.21.0/crictl-v1.21.0-linux-amd64.tar.gz \
   https://github.com/opencontainers/runc/releases/download/v1.0.0-rc93/runc.amd64 \
   https://github.com/containernetworking/plugins/releases/download/v0.9.1/cni-plugins-linux-amd64-v0.9.1.tgz \
@@ -63,11 +88,8 @@ wget -q --show-progress --https-only --timestamping \
   https://storage.googleapis.com/kubernetes-release/release/v1.21.0/bin/linux/amd64/kubectl \
   https://storage.googleapis.com/kubernetes-release/release/v1.21.0/bin/linux/amd64/kube-proxy \
   https://storage.googleapis.com/kubernetes-release/release/v1.21.0/bin/linux/amd64/kubelet
-```
 
-Create the installation directories:
-
-```
+# Create the installation directories
 sudo mkdir -p \
   /etc/cni/net.d \
   /opt/cni/bin \
@@ -75,11 +97,9 @@ sudo mkdir -p \
   /var/lib/kube-proxy \
   /var/lib/kubernetes \
   /var/run/kubernetes
-```
 
-Install the worker binaries:
+# Install the worker binaries:
 
-```
 mkdir containerd
 tar -xvf crictl-v1.21.0-linux-amd64.tar.gz
 tar -xvf containerd-1.4.4-linux-amd64.tar.gz -C containerd
@@ -88,75 +108,77 @@ sudo mv runc.amd64 runc
 chmod +x crictl kubectl kube-proxy kubelet runc 
 sudo mv crictl kubectl kube-proxy kubelet runc /usr/local/bin/
 sudo mv containerd/bin/* /bin/
+'@
+foreach ($i in $WorkerIPs.Keys) {
+  $ip = $WorkerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 ### Configure CNI Networking
 
-Retrieve the Pod CIDR range for the current compute instance:
-
-```
-POD_CIDR=$(curl -s http://169.254.169.254/latest/user-data/ \
-  | tr "|" "\n" | grep "^pod-cidr" | cut -d"=" -f2)
+```powershell
+$SshScript = @'
+# Retrieve the Pod CIDR range for the current compute instance
+POD_CIDR=$(curl -s http://169.254.169.254/latest/user-data/ | tr '|' '\n' | grep '^pod-cidr' | cut -d= -f2)
 echo "${POD_CIDR}"
-```
 
-Create the `bridge` network configuration file:
-
-```
+# Create the `bridge` network configuration file
 cat <<EOF | sudo tee /etc/cni/net.d/10-bridge.conf
 {
-    "cniVersion": "0.4.0",
-    "name": "bridge",
-    "type": "bridge",
-    "bridge": "cnio0",
-    "isGateway": true,
-    "ipMasq": true,
-    "ipam": {
-        "type": "host-local",
-        "ranges": [
-          [{"subnet": "${POD_CIDR}"}]
+    \"cniVersion\": \"0.4.0\",
+    \"name\": \"bridge\",
+    \"type\": \"bridge\",
+    \"bridge\": \"cnio0\",
+    \"isGateway\": true,
+    \"ipMasq\": true,
+    \"ipam\": {
+        \"type\": \"host-local\",
+        \"ranges\": [
+          [{\"subnet\": \"${POD_CIDR}\"}]
         ],
-        "routes": [{"dst": "0.0.0.0/0"}]
+        \"routes\": [{\"dst\": \"0.0.0.0/0\"}]
     }
 }
 EOF
-```
 
-Create the `loopback` network configuration file:
-
-```
+# Create the `loopback` network configuration file:
 cat <<EOF | sudo tee /etc/cni/net.d/99-loopback.conf
 {
-    "cniVersion": "0.4.0",
-    "name": "lo",
-    "type": "loopback"
+    \"cniVersion\": \"0.4.0\",
+    \"name\": \"lo\",
+    \"type\": \"loopback\"
 }
 EOF
+'@
+foreach ($i in $WorkerIPs.Keys) {
+  $ip = $WorkerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 ### Configure containerd
 
-Create the `containerd` configuration file:
-
-```
+```powershell
+$SshScript = @'
+# Create the `containerd` configuration file
 sudo mkdir -p /etc/containerd/
-```
 
-```
+# Create the containerd config file
 cat << EOF | sudo tee /etc/containerd/config.toml
 [plugins]
   [plugins.cri.containerd]
-    snapshotter = "overlayfs"
+    snapshotter = \"overlayfs\"
     [plugins.cri.containerd.default_runtime]
-      runtime_type = "io.containerd.runtime.v1.linux"
-      runtime_engine = "/usr/local/bin/runc"
-      runtime_root = ""
+      runtime_type = \"io.containerd.runtime.v1.linux\"
+      runtime_engine = \"/usr/local/bin/runc\"
+      runtime_root = \"\"
 EOF
-```
 
-Create the `containerd.service` systemd unit file:
+# Create the `containerd.service` systemd unit file
 
-```
 cat <<EOF | sudo tee /etc/systemd/system/containerd.service
 [Unit]
 Description=containerd container runtime
@@ -178,23 +200,29 @@ LimitCORE=infinity
 [Install]
 WantedBy=multi-user.target
 EOF
+'@
+foreach ($i in $WorkerIPs.Keys) {
+  $ip = $WorkerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 ### Configure the Kubelet
 
-```
-WORKER_NAME=$(curl -s http://169.254.169.254/latest/user-data/ \
-| tr "|" "\n" | grep "^name" | cut -d"=" -f2)
-echo "${WORKER_NAME}"
+```powershell
+$SshScript = @'
+# Retrieve worker node name
+WORKER_NAME=$(curl -s http://169.254.169.254/latest/user-data/ | tr '|' '\n' | grep '^name' | cut -d= -f2)
+echo $WORKER_NAME
 
-sudo mv ${WORKER_NAME}-key.pem ${WORKER_NAME}.pem /var/lib/kubelet/
-sudo mv ${WORKER_NAME}.kubeconfig /var/lib/kubelet/kubeconfig
+# Move certificates to their locations
+sudo mv \"${WORKER_NAME}-key.pem\" \"${WORKER_NAME}.pem\" /var/lib/kubelet/
+sudo mv \"${WORKER_NAME}.kubeconfig\" /var/lib/kubelet/kubeconfig
 sudo mv ca.pem /var/lib/kubernetes/
-```
 
-Create the `kubelet-config.yaml` configuration file:
-
-```
+# Create the `kubelet-config.yaml` configuration file
+# > The `resolvConf` configuration is used to avoid loops when using CoreDNS for service discovery on systems running `systemd-resolved`. 
 cat <<EOF | sudo tee /var/lib/kubelet/kubelet-config.yaml
 kind: KubeletConfiguration
 apiVersion: kubelet.config.k8s.io/v1beta1
@@ -204,25 +232,20 @@ authentication:
   webhook:
     enabled: true
   x509:
-    clientCAFile: "/var/lib/kubernetes/ca.pem"
+    clientCAFile: \"/var/lib/kubernetes/ca.pem\"
 authorization:
   mode: Webhook
-clusterDomain: "cluster.local"
+clusterDomain: \"cluster.local\"
 clusterDNS:
-  - "10.32.0.10"
-podCIDR: "${POD_CIDR}"
-resolvConf: "/run/systemd/resolve/resolv.conf"
-runtimeRequestTimeout: "15m"
-tlsCertFile: "/var/lib/kubelet/${WORKER_NAME}.pem"
-tlsPrivateKeyFile: "/var/lib/kubelet/${WORKER_NAME}-key.pem"
+  - \"172.18.0.10\"
+podCIDR: \"${POD_CIDR}\"
+resolvConf: \"/run/systemd/resolve/resolv.conf\"
+runtimeRequestTimeout: \"15m\"
+tlsCertFile: \"/var/lib/kubelet/${WORKER_NAME}.pem\"
+tlsPrivateKeyFile: \"/var/lib/kubelet/${WORKER_NAME}-key.pem\"
 EOF
-```
 
-> The `resolvConf` configuration is used to avoid loops when using CoreDNS for service discovery on systems running `systemd-resolved`. 
-
-Create the `kubelet.service` systemd unit file:
-
-```
+# Create the `kubelet.service` systemd unit file
 cat <<EOF | sudo tee /etc/systemd/system/kubelet.service
 [Unit]
 Description=Kubernetes Kubelet
@@ -246,30 +269,31 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+'@
+foreach ($i in $WorkerIPs.Keys) {
+  $ip = $WorkerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 ### Configure the Kubernetes Proxy
 
-```
+```powershell
+$SshScript = @'
 sudo mv kube-proxy.kubeconfig /var/lib/kube-proxy/kubeconfig
-```
 
-Create the `kube-proxy-config.yaml` configuration file:
-
-```
+# Create the `kube-proxy-config.yaml` configuration file:
 cat <<EOF | sudo tee /var/lib/kube-proxy/kube-proxy-config.yaml
 kind: KubeProxyConfiguration
 apiVersion: kubeproxy.config.k8s.io/v1alpha1
 clientConnection:
-  kubeconfig: "/var/lib/kube-proxy/kubeconfig"
-mode: "iptables"
-clusterCIDR: "10.200.0.0/16"
+  kubeconfig: \"/var/lib/kube-proxy/kubeconfig\"
+mode: \"iptables\"
+clusterCIDR: \"172.17.0.0/16\"
 EOF
-```
 
-Create the `kube-proxy.service` systemd unit file:
-
-```
+# Create the `kube-proxy.service` systemd unit file:
 cat <<EOF | sudo tee /etc/systemd/system/kube-proxy.service
 [Unit]
 Description=Kubernetes Kube Proxy
@@ -284,14 +308,36 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+'@
+foreach ($i in $WorkerIPs.Keys) {
+  $ip = $WorkerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 ### Start the Worker Services
 
-```
+```powershell
+$SshScript = @'
+# Add controllers into the `/etc/hosts`
+for i in 0 1 2
+do
+  hostsline=\"172.16.1.2$i ip-172-16-1-2$i\"
+  grep \"$hostsline\" /etc/hosts || (echo \"$hostsline\" | sudo tee -a /etc/hosts)
+done
+
+# Start Worker services
 sudo systemctl daemon-reload
 sudo systemctl enable containerd kubelet kube-proxy
-sudo systemctl start containerd kubelet kube-proxy
+sudo systemctl restart containerd kubelet kube-proxy
+sudo systemctl status containerd kubelet kube-proxy
+'@
+foreach ($i in $WorkerIPs.Keys) {
+  $ip = $WorkerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 ```
 
 > Remember to run the above commands on each worker node: `worker-0`, `worker-1`, and `worker-2`.
@@ -302,22 +348,23 @@ sudo systemctl start containerd kubelet kube-proxy
 
 List the registered Kubernetes nodes:
 
-```
-external_ip=$(aws ec2 describe-instances --filters \
-    "Name=tag:Name,Values=controller-0" \
-    "Name=instance-state-name,Values=running" \
-    --output text --query 'Reservations[].Instances[].PublicIpAddress')
-
-ssh -i kubernetes.id_rsa ubuntu@${external_ip} kubectl get nodes --kubeconfig admin.kubeconfig
-```
+```powershell
+$SshScript = @'
+kubectl get nodes --kubeconfig admin.kubeconfig
+'@
+foreach ($i in $ControllerIPs.Keys) {
+  $ip = $ControllerIPs[$i]
+  Write-Host "Invoking script on $i ($ip)"
+  ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
+}
 
 > output
 
 ```
 NAME             STATUS   ROLES    AGE   VERSION
-ip-10-0-1-20   Ready    <none>   51s   v1.21.0
-ip-10-0-1-21   Ready    <none>   51s   v1.21.0
-ip-10-0-1-22   Ready    <none>   51s   v1.21.0
+ip-172-16-1-20   Ready    <none>   3m13s   v1.21.0
+ip-172-16-1-21   Ready    <none>   16s     v1.21.0
+ip-172-16-1-22   Ready    <none>   15s     v1.21.0
 ```
 
 Next: [Configuring kubectl for Remote Access](10-configuring-kubectl.md)
