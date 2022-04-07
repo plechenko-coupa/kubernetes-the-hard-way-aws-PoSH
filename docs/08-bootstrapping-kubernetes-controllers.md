@@ -54,7 +54,7 @@ DOWNLOAD_URL=\"https://storage.googleapis.com/kubernetes-release/release/${K8S_V
 sudo mkdir -p /etc/kubernetes/config
 
 #Download the official Kubernetes release binaries
-wget -q --show-progress --https-only --timestamping \
+wget --no-verbose --https-only --timestamping \
   \"${DOWNLOAD_URL}/kube-apiserver\" \
   \"${DOWNLOAD_URL}/kube-controller-manager\" \
   \"${DOWNLOAD_URL}/kube-scheduler\" \
@@ -129,7 +129,7 @@ ExecStart=/usr/local/bin/kube-apiserver \\
   --service-account-key-file=/var/lib/kubernetes/service-account.pem \\
   --service-account-signing-key-file=/var/lib/kubernetes/service-account-key.pem \\
   --service-account-issuer=https://${KubernetesPublicAddress}:443 \\
-  --service-cluster-ip-range=10.32.0.0/24 \\
+  --service-cluster-ip-range=172.18.0.0/24 \\
   --service-node-port-range=30000-32767 \\
   --tls-cert-file=/var/lib/kubernetes/kubernetes.pem \\
   --tls-private-key-file=/var/lib/kubernetes/kubernetes-key.pem \\
@@ -244,7 +244,7 @@ foreach ($i in $ControllerIPs.Keys) {
 $SshScript = @'
 sudo systemctl daemon-reload
 sudo systemctl enable kube-apiserver kube-controller-manager kube-scheduler
-sudo systemctl start kube-apiserver kube-controller-manager kube-scheduler
+sudo systemctl restart kube-apiserver kube-controller-manager kube-scheduler
 '@
 foreach ($i in $ControllerIPs.Keys) {
   $ip = $ControllerIPs[$i]
