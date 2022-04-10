@@ -50,8 +50,20 @@ foreach ($i in (0..2)) {
     )
   ).Instances.PublicIpAddress
 
+  Write-Host "Copying encryption config to ${InstanceName}:"
   scp -i kubernetes.id_rsa encryption-config.yaml "ubuntu@${InstanceExtIp}:~/"
 }
+```
+
+Results:
+
+```output
+Copying encryption config to controller-0:
+encryption-config.yaml
+Copying encryption config to controller-1:
+encryption-config.yaml
+Copying encryption config to controller-2:
+encryption-config.yaml
 ```
 
 Next: [Bootstrapping the etcd Cluster](07-bootstrapping-etcd.md)

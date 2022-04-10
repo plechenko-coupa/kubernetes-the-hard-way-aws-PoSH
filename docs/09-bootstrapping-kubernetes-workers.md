@@ -32,10 +32,6 @@ foreach ($i in (0..2)) {
 
 Now ssh into each one of the IP addresses received in last step.
 
-### Running commands in parallel with tmux
-
-[tmux](https://github.com/tmux/tmux/wiki) can be used to run commands on multiple compute instances at the same time. See the [Running commands in parallel with tmux](01-prerequisites.md#running-commands-in-parallel-with-tmux) section in the Prerequisites lab.
-
 ## Provisioning a Kubernetes Worker Node
 
 Install the OS dependencies:
@@ -121,8 +117,8 @@ foreach ($i in $WorkerIPs.Keys) {
 ```powershell
 $SshScript = @'
 # Retrieve the Pod CIDR range for the current compute instance
-POD_CIDR=$(curl -s http://169.254.169.254/latest/user-data/ | tr '|' '\n' | grep '^pod-cidr' | cut -d= -f2)
-echo "${POD_CIDR}"
+POD_CIDR=$(curl -s http://169.254.169.254/latest/meta-data/tags/instance/pod_cidr)
+echo ${POD_CIDR}
 
 # Create the `bridge` network configuration file
 cat <<EOF | sudo tee /etc/cni/net.d/10-bridge.conf
@@ -211,18 +207,18 @@ foreach ($i in $WorkerIPs.Keys) {
 ### Configure the Kubelet
 
 ```powershell
-$SshScript = @'
+$SshScript = @"
 # Retrieve worker node name
-WORKER_NAME=$(curl -s http://169.254.169.254/latest/user-data/ | tr '|' '\n' | grep '^name' | cut -d= -f2)
-echo $WORKER_NAME
+WORKER_NAME=`$(curl -s http://169.254.169.254/latest/meta-data/tags/instance/Name)
+echo `$WORKER_NAME
 
 # Move certificates to their locations
-sudo mv \"${WORKER_NAME}-key.pem\" \"${WORKER_NAME}.pem\" /var/lib/kubelet/
-sudo mv \"${WORKER_NAME}.kubeconfig\" /var/lib/kubelet/kubeconfig
+sudo mv \"`${WORKER_NAME}-key.pem\" \"`${WORKER_NAME}.pem\" /var/lib/kubelet/
+sudo mv \"`${WORKER_NAME}.kubeconfig\" /var/lib/kubelet/kubeconfig
 sudo mv ca.pem /var/lib/kubernetes/
 
-# Create the `kubelet-config.yaml` configuration file
-# > The `resolvConf` configuration is used to avoid loops when using CoreDNS for service discovery on systems running `systemd-resolved`. 
+# Create the kubelet-config.yaml configuration file
+# > The resolvConf configuration is used to avoid loops when using CoreDNS for service discovery on systems running `systemd-resolved`. 
 cat <<EOF | sudo tee /var/lib/kubelet/kubelet-config.yaml
 kind: KubeletConfiguration
 apiVersion: kubelet.config.k8s.io/v1beta1
@@ -237,15 +233,15 @@ authorization:
   mode: Webhook
 clusterDomain: \"cluster.local\"
 clusterDNS:
-  - \"172.18.0.10\"
-podCIDR: \"${POD_CIDR}\"
+  - \"${K8sPodCidrPrefix}.0.10\"
+podCIDR: \"`${POD_CIDR}\"
 resolvConf: \"/run/systemd/resolve/resolv.conf\"
 runtimeRequestTimeout: \"15m\"
-tlsCertFile: \"/var/lib/kubelet/${WORKER_NAME}.pem\"
-tlsPrivateKeyFile: \"/var/lib/kubelet/${WORKER_NAME}-key.pem\"
+tlsCertFile: \"/var/lib/kubelet/`${WORKER_NAME}.pem\"
+tlsPrivateKeyFile: \"/var/lib/kubelet/`${WORKER_NAME}-key.pem\"
 EOF
 
-# Create the `kubelet.service` systemd unit file
+# Create the kubelet.service systemd unit file
 cat <<EOF | sudo tee /etc/systemd/system/kubelet.service
 [Unit]
 Description=Kubernetes Kubelet
@@ -269,7 +265,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-'@
+"@
 foreach ($i in $WorkerIPs.Keys) {
   $ip = $WorkerIPs[$i]
   Write-Host "Invoking script on $i ($ip)"
@@ -280,20 +276,20 @@ foreach ($i in $WorkerIPs.Keys) {
 ### Configure the Kubernetes Proxy
 
 ```powershell
-$SshScript = @'
+$SshScript = @"
 sudo mv kube-proxy.kubeconfig /var/lib/kube-proxy/kubeconfig
 
-# Create the `kube-proxy-config.yaml` configuration file:
+# Create the kube-proxy-config.yaml configuration file:
 cat <<EOF | sudo tee /var/lib/kube-proxy/kube-proxy-config.yaml
 kind: KubeProxyConfiguration
 apiVersion: kubeproxy.config.k8s.io/v1alpha1
 clientConnection:
   kubeconfig: \"/var/lib/kube-proxy/kubeconfig\"
 mode: \"iptables\"
-clusterCIDR: \"172.17.0.0/16\"
+clusterCIDR: \"${K8sClusterCidrPrefix}.0.0/16\"
 EOF
 
-# Create the `kube-proxy.service` systemd unit file:
+# Create the kube-proxy.service systemd unit file:
 cat <<EOF | sudo tee /etc/systemd/system/kube-proxy.service
 [Unit]
 Description=Kubernetes Kube Proxy
@@ -308,7 +304,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-'@
+"@
 foreach ($i in $WorkerIPs.Keys) {
   $ip = $WorkerIPs[$i]
   Write-Host "Invoking script on $i ($ip)"
@@ -319,12 +315,14 @@ foreach ($i in $WorkerIPs.Keys) {
 ### Start the Worker Services
 
 ```powershell
-$SshScript = @'
-# Add controllers into the `/etc/hosts`
+$SshScript = @"
+# Add controllers and workers into the `/etc/hosts`
 for i in 0 1 2
 do
-  hostsline=\"172.16.1.2$i ip-172-16-1-2$i\"
-  grep \"$hostsline\" /etc/hosts || (echo \"$hostsline\" | sudo tee -a /etc/hosts)
+  hostsline=\"$K8sNodesCidrPrefix.1.1`$i ip-$($K8sNodesCidrPrefix.Replace('.','-'))-1-1`$i\"
+  grep \"`$hostsline\" /etc/hosts || (echo \"`$hostsline\" | sudo tee -a /etc/hosts)
+  hostsline=\"$K8sNodesCidrPrefix.1.2`$i ip-$($K8sNodesCidrPrefix.Replace('.','-'))-1-2`$i\"
+  grep \"`$hostsline\" /etc/hosts || (echo \"`$hostsline\" | sudo tee -a /etc/hosts)
 done
 
 # Start Worker services
@@ -332,7 +330,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable containerd kubelet kube-proxy
 sudo systemctl restart containerd kubelet kube-proxy
 sudo systemctl status containerd kubelet kube-proxy
-'@
+"@
 foreach ($i in $WorkerIPs.Keys) {
   $ip = $WorkerIPs[$i]
   Write-Host "Invoking script on $i ($ip)"
@@ -357,10 +355,11 @@ foreach ($i in $ControllerIPs.Keys) {
   Write-Host "Invoking script on $i ($ip)"
   ssh -i kubernetes.id_rsa ubuntu@$ip $SshScript
 }
+```
 
 > output
 
-```
+```output
 NAME             STATUS   ROLES    AGE   VERSION
 ip-172-16-1-20   Ready    <none>   3m13s   v1.21.0
 ip-172-16-1-21   Ready    <none>   16s     v1.21.0

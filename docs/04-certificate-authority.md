@@ -46,13 +46,17 @@ Generate the CA configuration file, certificate, and private key:
 } | ConvertTo-Json -Depth 5 | Out-File -Encoding ascii ca-csr.json 
 
 cfssl gencert -initca ca-csr.json | cfssljson -bare ca
+
+Get-ChildItem 'ca*.pem'
 ```
 
 Results:
 
-```
-ca-key.pem
-ca.pem
+```output
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         4/10/2022   3:53 PM           1679 ca-key.pem
+-a----         4/10/2022   3:53 PM           1318 ca.pem
 ```
 
 ## Client and Server Certificates
@@ -87,13 +91,17 @@ cfssl gencert `
   -config='ca-config.json' `
   -profile='kubernetes' `
   admin-csr.json | cfssljson -bare admin
+
+Get-ChildItem 'admin*.pem'
 ```
 
 Results:
 
-```
-admin-key.pem
-admin.pem
+```output
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         4/10/2022   3:55 PM           1675 admin-key.pem
+-a----         4/10/2022   3:55 PM           1428 admin.pem
 ```
 
 ### The Kubelet Client Certificates
@@ -105,7 +113,7 @@ Generate a certificate and private key for each Kubernetes worker node:
 ```powershell
 foreach ($i in (0..2)){
   $InstanceName="worker-$i"
-  $InstanceHostname="ip-172-16-1-2$i"
+  $InstanceHostname="ip-$($K8sNodesCidrPrefix.Replace('.','-'))-1-2$i"
 
   @{
     CN = "system:node:$InstanceHostname"
@@ -147,17 +155,21 @@ foreach ($i in (0..2)){
     -profile='kubernetes' `
     "worker-$i-csr.json" | cfssljson -bare "worker-$i"
 }
+
+Get-ChildItem 'worker*.pem'
 ```
 
 Results:
 
-```
-worker-0-key.pem
-worker-0.pem
-worker-1-key.pem
-worker-1.pem
-worker-2-key.pem
-worker-2.pem
+```output
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         4/10/2022   3:56 PM           1679 worker-0-key.pem
+-a----         4/10/2022   3:56 PM           1509 worker-0.pem
+-a----         4/10/2022   3:56 PM           1675 worker-1-key.pem
+-a----         4/10/2022   3:56 PM           1509 worker-1.pem
+-a----         4/10/2022   3:56 PM           1675 worker-2-key.pem
+-a----         4/10/2022   3:56 PM           1509 worker-2.pem
 ```
 
 ### The Controller Manager Client Certificate
@@ -188,14 +200,19 @@ cfssl gencert `
   -config='ca-config.json' `
   -profile='kubernetes' `
   kube-controller-manager-csr.json | cfssljson -bare kube-controller-manager
+
+Get-ChildItem 'kube-controller-manager*.pem'
 ```
 
 Results:
 
+```output
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         4/10/2022   4:05 PM           1675 kube-controller-manager-key.pem
+-a----         4/10/2022   4:05 PM           1484 kube-controller-manager.pem
 ```
-kube-controller-manager-key.pem
-kube-controller-manager.pem
-```
+
 ### The Kube Proxy Client Certificate
 
 Generate the `kube-proxy` client certificate and private key:
@@ -224,13 +241,17 @@ cfssl gencert `
   -config='ca-config.json' `
   -profile='kubernetes' `
   kube-proxy-csr.json | cfssljson -bare kube-proxy
+
+Get-ChildItem 'kube-proxy*.pem'
 ```
 
 Results:
 
-```
-kube-proxy-key.pem
-kube-proxy.pem
+```output
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         4/10/2022   3:56 PM           1679 kube-proxy-key.pem
+-a----         4/10/2022   3:56 PM           1452 kube-proxy.pem
 ```
 
 ### The Scheduler Client Certificate
@@ -261,14 +282,19 @@ cfssl gencert `
   -config='ca-config.json' `
   -profile='kubernetes' `
   kube-scheduler-csr.json | cfssljson -bare kube-scheduler
+
+Get-ChildItem 'kube-scheduler*.pem'
 ```
 
 Results:
 
+```output
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         4/10/2022   3:57 PM           1675 kube-scheduler-key.pem
+-a----         4/10/2022   3:57 PM           1460 kube-scheduler.pem
 ```
-kube-scheduler-key.pem
-kube-scheduler.pem
-```
+
 ### The Kubernetes API Server Certificate
 
 The `kubernetes-the-hard-way` static IP address will be included in the list of subject alternative names for the Kubernetes API Server certificate. This will ensure the certificate can be validated by remote clients.
@@ -278,7 +304,23 @@ Generate the Kubernetes API Server certificate and private key:
 ```powershell
 $KubernetesPublicAddress = (Get-ELB2LoadBalancer -ProfileName $env:AWS_PROFILE -Name 'kubernetes').DNSName
 
-$KubernetesHostnames = 'kubernetes,kubernetes.default,kubernetes.default.svc,kubernetes.default.svc.cluster,kubernetes.svc.cluster.local'
+$KubernetesHostnames = @(
+  "${K8sNodesCidrPrefix}.1.10"
+  "${K8sNodesCidrPrefix}.1.11"
+  "${K8sNodesCidrPrefix}.1.12"
+  "${K8sNodesCidrPrefix}.1.30"
+  "${K8sNodesCidrPrefix}.1.31"
+  "${K8sNodesCidrPrefix}.1.32"
+  "${K8sClusterCidrPrefix}.0.1"
+  "${K8sPodCidrPrefix}.0.1"
+  $KubernetesPublicAddress
+  '127.0.0.1'
+  'kubernetes'
+  'kubernetes.default'
+  'kubernetes.default.svc'
+  'kubernetes.default.svc.cluster'
+  'kubernetes.svc.cluster.local'
+) -join ','
 
 @{
   CN = 'kubernetes'
@@ -301,18 +343,22 @@ cfssl gencert `
   -ca='ca.pem' `
   -ca-key='ca-key.pem' `
   -config='ca-config.json' `
-  -hostname="172.18.0.1,172.16.1.10,172.16.1.11,172.16.1.12,$KubernetesPublicAddress,127.0.0.1,$KubernetesHostnames" `
+  -hostname="$KubernetesHostnames" `
   -profile='kubernetes' `
   kubernetes-csr.json | cfssljson -bare kubernetes
+
+Get-ChildItem 'kubernetes*.pem'
 ```
 
 > The Kubernetes API server is automatically assigned the `kubernetes` internal dns name, which will be linked to the first IP address (`172.18.0.1`) from the address range (`172.18.0.0/24`) reserved for internal cluster services during the [control plane bootstrapping](08-bootstrapping-kubernetes-controllers.md#configure-the-kubernetes-api-server) lab.
 
 Results:
 
-```
-kubernetes-key.pem
-kubernetes.pem
+```output
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         4/10/2022   3:58 PM           1675 kubernetes-key.pem
+-a----         4/10/2022   3:58 PM           1761 kubernetes.pem
 ```
 
 ## The Service Account Key Pair
@@ -346,19 +392,21 @@ cfssl gencert `
   -profile='kubernetes' `
   service-account-csr.json | cfssljson -bare service-account
 
+Get-ChildItem 'service-account*.pem'
 ```
 
 Results:
 
+```output
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         4/10/2022   3:59 PM           1679 service-account-key.pem
+-a----         4/10/2022   3:59 PM           1440 service-account.pem
 ```
-service-account-key.pem
-service-account.pem
-```
-
 
 ## Distribute the Client and Server Certificates
 
-Copy the appropriate certificates and private keys to each worker instance:
+Copy the appropriate certificates and private keys to each worker, controller and etcd instance:
 
 ```powershell
 foreach ($i in (0..2)) {
@@ -376,14 +424,9 @@ foreach ($i in (0..2)) {
     )
   ).Instances.PublicIpAddress
 
+  Write-Host "Copying certificates to $InstanceName"
   scp -i kubernetes.id_rsa ca.pem "$InstanceName-key.pem" "$InstanceName.pem" "ubuntu@${InstanceExtIp}:~/"
-}
-```
 
-Copy the appropriate certificates and private keys to each controller instance:
-
-```powershell
-foreach ($i in (0..2)) {
   $InstanceName = "controller-$i"
   $InstanceExtIp = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
     -Filter @(
@@ -398,7 +441,25 @@ foreach ($i in (0..2)) {
     )
   ).Instances.PublicIpAddress
 
+  Write-Host "Copying certificates to $InstanceName"
   scp -i kubernetes.id_rsa ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem service-account-key.pem service-account.pem "ubuntu@${InstanceExtIp}:~/"
+
+  $InstanceName = "etcd-$i"
+  $InstanceExtIp = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
+    -Filter @(
+      @{
+        Name = 'tag:Name'
+        Values = $InstanceName
+      }
+      @{
+        Name = 'instance-state-name'
+        Values = 'running'
+      }      
+    )
+  ).Instances.PublicIpAddress
+
+  Write-Host "Copying certificates to $InstanceName"
+  scp -i kubernetes.id_rsa ca.pem kubernetes-key.pem kubernetes.pem "ubuntu@${InstanceExtIp}:~/"
 }
 ```
 

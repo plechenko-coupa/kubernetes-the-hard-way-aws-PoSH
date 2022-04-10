@@ -8,31 +8,40 @@ In this section you will verify the ability to [encrypt secret data at rest](htt
 
 Create a generic secret:
 
-```
-kubectl create secret generic kubernetes-the-hard-way \
-  --from-literal="mykey=mydata"
+```shell
+kubectl create secret generic kubernetes-the-hard-way --from-literal='mykey=mydata'
 ```
 
 Print a hexdump of the `kubernetes-the-hard-way` secret stored in etcd:
 
-```sh
-external_ip=$(aws ec2 describe-instances --filters \
-  "Name=tag:Name,Values=controller-0" \
-  "Name=instance-state-name,Values=running" \
-  --output text --query 'Reservations[].Instances[].PublicIpAddress')
+```powershell
+$Etcd0Ip = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
+  -Filter @(
+    @{
+      Name = 'tag:Name'
+      Values = 'etcd-0'
+    }
+    @{
+      Name = 'instance-state-name'
+      Values = 'running'
+    }      
+  )
+).Instances[0].PublicIpAddress
 
-ssh -i kubernetes.id_rsa ubuntu@${external_ip} \
- "sudo ETCDCTL_API=3 etcdctl get \
+$SshScript = @'
+sudo ETCDCTL_API=3 etcdctl get \
   --endpoints=https://127.0.0.1:2379 \
   --cacert=/etc/etcd/ca.pem \
   --cert=/etc/etcd/kubernetes.pem \
   --key=/etc/etcd/kubernetes-key.pem\
-  /registry/secrets/default/kubernetes-the-hard-way | hexdump -C"
+  /registry/secrets/default/kubernetes-the-hard-way | hexdump -C
+'@
+ssh -i kubernetes.id_rsa ubuntu@$Etcd0Ip $SshScript
 ```
 
 > output
 
-```
+```output
 00000000  2f 72 65 67 69 73 74 72  79 2f 73 65 63 72 65 74  |/registry/secret|
 00000010  73 2f 64 65 66 61 75 6c  74 2f 6b 75 62 65 72 6e  |s/default/kubern|
 00000020  65 74 65 73 2d 74 68 65  2d 68 61 72 64 2d 77 61  |etes-the-hard-wa|
@@ -66,19 +75,19 @@ In this section you will verify the ability to create and manage [Deployments](h
 
 Create a deployment for the [nginx](https://nginx.org/en/) web server:
 
-```
+```shell
 kubectl create deployment nginx --image=nginx
 ```
 
 List the pod created by the `nginx` deployment:
 
-```
+```shell
 kubectl get pods -l app=nginx
 ```
 
 > output
 
-```
+```output
 NAME                    READY   STATUS    RESTARTS   AGE
 nginx-f89759699-kpn5m   1/1     Running   0          10s
 ```
@@ -87,34 +96,28 @@ nginx-f89759699-kpn5m   1/1     Running   0          10s
 
 In this section you will verify the ability to access applications remotely using [port forwarding](https://kubernetes.io/docs/tasks/access-application-cluster/port-forward-access-application-cluster/).
 
-Retrieve the full name of the `nginx` pod:
-
-```
-POD_NAME=$(kubectl get pods -l app=nginx -o jsonpath="{.items[0].metadata.name}")
-```
-
 Forward port `8080` on your local machine to port `80` of the `nginx` pod:
 
-```
-kubectl port-forward $POD_NAME 8080:80
+```shell
+kubectl port-forward $(kubectl get pods -l app=nginx -o jsonpath='{.items[0].metadata.name}') 8080:80
 ```
 
 > output
 
-```
+```output
 Forwarding from 127.0.0.1:8080 -> 80
 Forwarding from [::1]:8080 -> 80
 ```
 
 In a new terminal make an HTTP request using the forwarding address:
 
-```
-curl --head http://127.0.0.1:8080
+```powershell
+curl.exe --head http://127.0.0.1:8080
 ```
 
 > output
 
-```
+```output
 HTTP/1.1 200 OK
 Server: nginx/1.21.1
 Date: Sat, 07 Aug 2021 21:08:34 GMT
@@ -128,7 +131,7 @@ Accept-Ranges: bytes
 
 Switch back to the previous terminal and stop the port forwarding to the `nginx` pod:
 
-```
+```output
 Forwarding from 127.0.0.1:8080 -> 80
 Forwarding from [::1]:8080 -> 80
 Handling connection for 8080
@@ -141,13 +144,13 @@ In this section you will verify the ability to [retrieve container logs](https:/
 
 Print the `nginx` pod logs:
 
-```
-kubectl logs $POD_NAME
+```shell
+kubectl logs $(kubectl get pods -l app=nginx -o jsonpath='{.items[0].metadata.name}')
 ```
 
 > output
 
-```
+```output
 ...
 127.0.0.1 - - [07/Aug/2021:21:08:34 +0000] "HEAD / HTTP/1.1" 200 0 "-" "curl/7.64.1" "-"
 ```
@@ -158,13 +161,13 @@ In this section you will verify the ability to [execute commands in a container]
 
 Print the nginx version by executing the `nginx -v` command in the `nginx` container:
 
-```
-kubectl exec -ti $POD_NAME -- nginx -v
+```shell
+kubectl exec -ti $(kubectl get pods -l app=nginx -o jsonpath='{.items[0].metadata.name}') -- nginx -v
 ```
 
 > output
 
-```
+```output
 nginx version: nginx/1.21.1
 ```
 
@@ -174,53 +177,59 @@ In this section you will verify the ability to expose applications using a [Serv
 
 Expose the `nginx` deployment using a [NodePort](https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport) service:
 
-```
+```shell
 kubectl expose deployment nginx --port 80 --type NodePort
 ```
 
 > The LoadBalancer service type can not be used because your cluster is not configured with [cloud provider integration](https://kubernetes.io/docs/getting-started-guides/scratch/#cloud-provider). Setting up cloud provider integration is out of scope for this tutorial.
 
-Retrieve the node port assigned to the `nginx` service:
-
-```
-NODE_PORT=$(kubectl get svc nginx \
-  --output=jsonpath='{range .spec.ports[0]}{.nodePort}')
-```
-
 Create a firewall rule that allows remote access to the `nginx` node port:
 
-```
-aws ec2 authorize-security-group-ingress \
-  --group-id ${SECURITY_GROUP_ID} \
-  --protocol tcp \
-  --port ${NODE_PORT} \
-  --cidr 0.0.0.0/0
+```powershell
+$SecurityGroup = Get-EC2SecurityGroup -ProfileName $env:AWS_PROFILE | Where-Object GroupName -EQ 'kuberbnetes'
+
+$NodePort = kubectl get svc nginx --output=jsonpath='{range .spec.ports[0]}{.nodePort}'
+$MyIp = (Invoke-RestMethod 'https://ip.zscaler.com/index.php?json' -UseBasicParsing).clientip
+
+(Grant-EC2SecurityGroupIngress -ProfileName $env:AWS_PROFILE `
+  -GroupId $SecurityGroup.GroupId `
+  -IpPermission @(
+    @{IpProtocol='tcp'; ToPort=$NodePort; FromPort=$NodePort; IpRanges="${MyIp}/32"}  # Access to NodePort from my IP address
+  )
+).SecurityGroupRules
 ```
 
 Get the worker node name where the `nginx` pod is running:
 
-```
-INSTANCE_NAME=$(kubectl get pod $POD_NAME --output=jsonpath='{.spec.nodeName}')
-```
+Retrieve the external IP address of a worker instance where the `nginx` pod is running:
 
-Retrieve the external IP address of a worker instance:
+```powershell
+$WorkerName = kubectl get pod $(kubectl get pods -l app=nginx -o jsonpath='{.items[0].metadata.name}') --output=jsonpath='{.spec.nodeName}'
+$NodePort = kubectl get svc nginx --output=jsonpath='{range .spec.ports[0]}{.nodePort}'
 
-```
-EXTERNAL_IP=$(aws ec2 describe-instances --filters \
-    "Name=instance-state-name,Values=running" \
-    "Name=network-interface.private-dns-name,Values=${INSTANCE_NAME}.*.internal*" \
-    --output text --query 'Reservations[].Instances[].PublicIpAddress')
+$WorkerExtIp = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
+  -Filter @(
+    @{
+      Name = 'network-interface.private-dns-name'
+      Values = "$WorkerName.*.internal*"
+    }
+    @{
+      Name = 'instance-state-name'
+      Values = 'running'
+    }      
+  )
+).Instances[0].PublicIpAddress
 ```
 
 Make an HTTP request using the external IP address and the `nginx` node port:
 
-```
-curl -I http://${EXTERNAL_IP}:${NODE_PORT}
+```powershell
+curl.exe -I http://${WorkerExtIp}:${NodePort}
 ```
 
 > output
 
-```
+```output
 HTTP/1.1 200 OK
 Server: nginx/1.21.1
 Date: Sat, 07 Aug 2021 21:16:44 GMT

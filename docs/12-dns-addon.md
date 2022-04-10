@@ -6,13 +6,13 @@ In this lab you will deploy the [DNS add-on](https://kubernetes.io/docs/concepts
 
 Deploy the `coredns` cluster add-on:
 
-```
-kubectl apply -f https://storage.googleapis.com/kubernetes-the-hard-way/coredns-1.8.yaml
+```powershell
+(Get-Content deployments/coredns.yaml -Raw) -replace '<CLUSTER_IP>',"${K8sPodCidrPrefix}.0.10" | kubectl apply -f -
 ```
 
 > output
 
-```
+```output
 serviceaccount/coredns created
 clusterrole.rbac.authorization.k8s.io/system:coredns created
 clusterrolebinding.rbac.authorization.k8s.io/system:coredns created
@@ -23,13 +23,13 @@ service/kube-dns created
 
 List the pods created by the `core-dns` deployment:
 
-```
+```sh
 kubectl get pods -l k8s-app=kube-dns -n kube-system
 ```
 
 > output
 
-```
+```output
 NAME                       READY   STATUS    RESTARTS   AGE
 coredns-8494f9c688-hh7r2   1/1     Running   0          10s
 coredns-8494f9c688-zqrj2   1/1     Running   0          10s
@@ -39,43 +39,37 @@ coredns-8494f9c688-zqrj2   1/1     Running   0          10s
 
 Create a `busybox` deployment:
 
-```
+```sh
 kubectl run busybox --image=busybox:1.28 --command -- sleep 3600
 ```
 
 List the pod created by the `busybox` deployment:
 
-```
+```sh
 kubectl get pods -l run=busybox
 ```
 
 > output
 
-```
+```output
 NAME      READY   STATUS    RESTARTS   AGE
 busybox   1/1     Running   0          3s
 ```
 
-Retrieve the full name of the `busybox` pod:
-
-```
-POD_NAME=$(kubectl get pods -l run=busybox -o jsonpath="{.items[0].metadata.name}")
-```
-
 Execute a DNS lookup for the `kubernetes` service inside the `busybox` pod:
 
-```
-kubectl exec -ti $POD_NAME -- nslookup kubernetes
+```shell
+kubectl exec -ti $(kubectl get pods -l run=busybox -o jsonpath='{.items[0].metadata.name}') -- nslookup kubernetes
 ```
 
 > output
 
-```
-Server:    10.32.0.10
-Address 1: 10.32.0.10 kube-dns.kube-system.svc.cluster.local
+```output
+Server:    172.22.0.10
+Address 1: 172.22.0.10 kube-dns.kube-system.svc.cluster.local
 
 Name:      kubernetes
-Address 1: 10.32.0.1 kubernetes.default.svc.cluster.local
+Address 1: 172.22.0.1 kubernetes.default.svc.cluster.local
 ```
 
 Next: [Smoke Test](13-smoke-test.md)

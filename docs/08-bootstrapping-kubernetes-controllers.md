@@ -77,7 +77,7 @@ foreach ($i in $ControllerIPs.Keys) {
 $SshScript = @'
 sudo mkdir -p /var/lib/kubernetes/
 
-sudo mv ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem \
+sudo cp ca.pem ca-key.pem kubernetes-key.pem kubernetes.pem \
   service-account-key.pem service-account.pem \
   encryption-config.yaml /var/lib/kubernetes/
 '@
@@ -97,6 +97,7 @@ $KubernetesPublicAddress = (Get-ELB2LoadBalancer -ProfileName $env:AWS_PROFILE -
 
 $SshScript = @"
 INTERNAL_IP=`$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+INTERNAL_CIDR_PREFIX=`$(echo `${INTERNAL_IP} | cut -d'.' -f 1,2 -s)
 
 cat <<EOF | sudo tee /etc/systemd/system/kube-apiserver.service
 [Unit]
@@ -119,7 +120,7 @@ ExecStart=/usr/local/bin/kube-apiserver \\
   --etcd-cafile=/var/lib/kubernetes/ca.pem \\
   --etcd-certfile=/var/lib/kubernetes/kubernetes.pem \\
   --etcd-keyfile=/var/lib/kubernetes/kubernetes-key.pem \\
-  --etcd-servers=https://172.16.1.10:2379,https://172.16.1.11:2379,https://172.16.1.12:2379 \\
+  --etcd-servers=https://`${INTERNAL_CIDR_PREFIX}.1.30:2379,https://`${INTERNAL_CIDR_PREFIX}.1.31:2379,https://`${INTERNAL_CIDR_PREFIX}.1.32:2379 \\
   --event-ttl=1h \\
   --encryption-provider-config=/var/lib/kubernetes/encryption-config.yaml \\
   --kubelet-certificate-authority=/var/lib/kubernetes/ca.pem \\
@@ -129,7 +130,7 @@ ExecStart=/usr/local/bin/kube-apiserver \\
   --service-account-key-file=/var/lib/kubernetes/service-account.pem \\
   --service-account-signing-key-file=/var/lib/kubernetes/service-account-key.pem \\
   --service-account-issuer=https://${KubernetesPublicAddress}:443 \\
-  --service-cluster-ip-range=172.18.0.0/24 \\
+  --service-cluster-ip-range=${K8sPodCidrPrefix}.0.0/24 \\
   --service-node-port-range=30000-32767 \\
   --tls-cert-file=/var/lib/kubernetes/kubernetes.pem \\
   --tls-private-key-file=/var/lib/kubernetes/kubernetes-key.pem \\
@@ -155,7 +156,7 @@ Move the `kube-controller-manager` kubeconfig into `/var/lib/kubernetes/`.
 Create the `kube-controller-manager.service` systemd unit file
 
 ```powershell
-$SshScript = @'
+$SshScript = @"
 sudo mv kube-controller-manager.kubeconfig /var/lib/kubernetes/
 
 cat <<EOF | sudo tee /etc/systemd/system/kube-controller-manager.service
@@ -166,7 +167,7 @@ Documentation=https://github.com/kubernetes/kubernetes
 [Service]
 ExecStart=/usr/local/bin/kube-controller-manager \\
   --bind-address=0.0.0.0 \\
-  --cluster-cidr=172.17.0.0/16 \\
+  --cluster-cidr=${K8sClusterCidrPrefix}.0.0/16 \\
   --cluster-name=kubernetes \\
   --cluster-signing-cert-file=/var/lib/kubernetes/ca.pem \\
   --cluster-signing-key-file=/var/lib/kubernetes/ca-key.pem \\
@@ -174,7 +175,7 @@ ExecStart=/usr/local/bin/kube-controller-manager \\
   --leader-elect=true \\
   --root-ca-file=/var/lib/kubernetes/ca.pem \\
   --service-account-private-key-file=/var/lib/kubernetes/service-account-key.pem \\
-  --service-cluster-ip-range=172.18.0.0/24 \\
+  --service-cluster-ip-range=${K8sPodCidrPrefix}.0.0/24 \\
   --use-service-account-credentials=true \\
   --v=2
 Restart=on-failure
@@ -183,7 +184,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-'@
+"@
 foreach ($i in $ControllerIPs.Keys) {
   $ip = $ControllerIPs[$i]
   Write-Host "Invoking script on $i ($ip)"
@@ -245,6 +246,7 @@ $SshScript = @'
 sudo systemctl daemon-reload
 sudo systemctl enable kube-apiserver kube-controller-manager kube-scheduler
 sudo systemctl restart kube-apiserver kube-controller-manager kube-scheduler
+sudo systemctl status kube-apiserver kube-controller-manager kube-scheduler
 '@
 foreach ($i in $ControllerIPs.Keys) {
   $ip = $ControllerIPs[$i]
@@ -268,7 +270,7 @@ foreach ($i in $ControllerIPs.Keys) {
 }
 ```
 
-```
+```output
 Kubernetes control plane is running at https://127.0.0.1:6443
 ```
 
@@ -282,13 +284,13 @@ AWS.  The workaround is to add manual host entries on each of the controller
 nodes with this command:
 
 ```powershell
-$SshScript = @'
+$SshScript = @"
 for i in 0 1 2
 do
-  hostsline=\"172.16.1.2$i ip-172-16-1-2$i\"
-  grep \"$hostsline\" /etc/hosts || (echo \"$hostsline\" | sudo tee -a /etc/hosts)
+  hostsline=\"$K8sNodesCidrPrefix.1.2`$i ip-$($K8sNodesCidrPrefix.Replace('.','-'))-1-2`$i\"
+  grep \"`$hostsline\" /etc/hosts || (echo \"`$hostsline\" | sudo tee -a /etc/hosts)
 done
-'@
+"@
 foreach ($i in $ControllerIPs.Keys) {
   $ip = $ControllerIPs[$i]
   Write-Host "Invoking script on $i ($ip)"
@@ -332,6 +334,8 @@ rules:
     verbs:
       - \"*\"
 EOF
+
+kubectl --kubeconfig admin.kubeconfig describe ClusterRole system:kube-apiserver-to-kubelet
 '@
 $ip = $ControllerIPs['controller-0']
 Write-Host "Invoking script on $i ($ip)"
@@ -359,6 +363,8 @@ subjects:
     kind: User
     name: kubernetes
 EOF
+
+kubectl --kubeconfig admin.kubeconfig describe ClusterRoleBinding system:kube-apiserver
 '@
 $ip = $ControllerIPs['controller-0']
 Write-Host "Invoking script on $i ($ip)"
@@ -378,7 +384,7 @@ curl.exe --cacert ca.pem "https://$KubernetesPublicAddress/version" -k
 
 > output
 
-```
+```output
 {
   "major": "1",
   "minor": "21",

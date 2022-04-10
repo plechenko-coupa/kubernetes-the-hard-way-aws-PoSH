@@ -39,7 +39,7 @@ kubectl version
 
 > output
 
-```
+```output
 Client Version: version.Info{Major:"1", Minor:"21", GitVersion:"v1.21.0", GitCommit:"cb303e613a121a29364f75cc67d3d580833a7479", GitTreeState:"clean", BuildDate:"2021-04-08T16:31:21Z", GoVersion:"go1.16.1", Compiler:"gc", Platform:"linux/amd64"}
 Server Version: version.Info{Major:"1", Minor:"21", GitVersion:"v1.21.0", GitCommit:"cb303e613a121a29364f75cc67d3d580833a7479", GitTreeState:"clean", BuildDate:"2021-04-08T16:25:06Z", GoVersion:"go1.16.1", Compiler:"gc", Platform:"linux/amd64"}
 ```
@@ -52,7 +52,7 @@ kubectl get nodes
 
 > output
 
-```
+```output
 NAME             STATUS   ROLES    AGE   VERSION
 ip-172-16-1-20   Ready    <none>   22m   v1.21.0
 ip-172-16-1-21   Ready    <none>   19m   v1.21.0

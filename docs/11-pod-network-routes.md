@@ -15,8 +15,6 @@ In production workloads this functionality will be provided by CNI plugins like 
 Print the internal IP address and Pod CIDR range for each worker instance and create route table entries:
 
 ```powershell
-$WorkerIPs = @{}
-
 foreach ($i in (0..2)) {
   $InstanceName = "worker-$i"
   $Instance = (Get-Ec2Instance -ProfileName $env:AWS_PROFILE `
@@ -34,15 +32,7 @@ foreach ($i in (0..2)) {
 
   $InstanceId = $Instance.InstanceId
   $InstanceIp = $Instance.PrivateIpAddress
-  
-  $InstanceUserData = Get-Ec2InstanceAttribute -ProfileName $env:AWS_PROFILE `
-    -InstanceId $InstanceId `
-    -Attribute userData
-  $PodCidr = ([System.Text.Encoding]::ASCII.GetString(
-      [System.Convert]::FromBase64String($InstanceUserData.UserData)
-    ) -split '\|' `
-    | Where-Object {$_ -like 'pod-cidr*'}) -split '=' `
-    | Select-Object -Last 1
+  $PodCidr = $Instance.Tags.Where({$_.Key -eq 'pod_cidr'}).Value
 
   Write-Host "$InstanceIp $PodCidr"
 
@@ -59,7 +49,6 @@ foreach ($i in (0..2)) {
     -RouteTableId $RouteTable.RouteTableId `
     -DestinationCidrBlock $PodCidr `
     -InstanceId $InstanceId
-
 }
 ```
 
@@ -79,26 +68,27 @@ True
 Validate network routes for each worker instance:
 
 ```powershell
-Get-EC2RouteTable -ProfileName $env:AWS_PROFILE `
+(Get-EC2RouteTable -ProfileName $env:AWS_PROFILE `
   -Filter @(
     @{
       Name = 'tag:Name'
       Values = 'kubernetes'
     }
   ) `
-  | Format-Table
+).Routes | Format-Table -Property DestinationCidrBlock, InstanceId, GatewayId
 
 ```
 
 > output
 
 ```output
-CarrierGatewayId DestinationCidrBlock DestinationIpv6CidrBlock DestinationPrefixListId EgressOnlyInternetGatewayId GatewayId             InstanceId          InstanceOwnerId LocalGatewayId NatGatewayId
----------------- -------------------- ------------------------ ----------------------- --------------------------- ---------             ----------          --------------- -------------- ------------
-                 176.17.0.0/24                                                                                                           i-09b469bbe25deff9a 660200843256
-                 176.17.1.0/24                                                                                                           i-0a20f395802486a24 660200843256
-                 172.16.0.0/16                                                                                     local
-                 0.0.0.0/0                                                                                         igw-0ee0f75fa0a1bc4db
+DestinationCidrBlock InstanceId          GatewayId
+-------------------- ----------          ---------
+172.22.0.0/24        i-0e895e8ab1fdd8b12
+172.22.1.0/24        i-07c5347a9b6829462
+172.22.2.0/24        i-05f5c186fff2d58ea
+172.20.0.0/16                            local
+0.0.0.0/0                                igw-0c1d4a66f1314aeb9
 ```
 
 Next: [Deploying the DNS Cluster Add-on](12-dns-addon.md)
